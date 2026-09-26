@@ -22,6 +22,8 @@
 #   OFFLINE_SCREEN  1 (по умолчанию) — заставка, пока OBS не в эфире; нужен звук AAC 48 кГц. 0 — выключить
 #   RTMP_PORT       1935
 #   RTSP_PORT       8554
+#   FIREWALL        1 (по умолчанию) — установить и настроить ufw (SSH не закрывается). 0 — не трогать
+#   FIREWALL_EXTRA  дополнительные открытые порты через пробел, например "25565/tcp 7777/udp"
 #   MEDIAMTX_VERSION  версия MediaMTX (по умолчанию v1.21.1)
 set -euo pipefail
 
@@ -29,7 +31,7 @@ VRC_STREAM_VERSION=1.0.2
 MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-v1.21.1}"
 SETTINGS_DIR=/etc/vrc-stream
 SETTINGS_FILE=$SETTINGS_DIR/settings.env
-SETTINGS_VARS=(STREAM_KEY DOMAIN EMAIL PUBLIC_HOST HLS_SEGMENT HLS_VARIANT OFFLINE_SCREEN RTMP_PORT RTSP_PORT HLS_CDN_SECRET)
+SETTINGS_VARS=(STREAM_KEY DOMAIN EMAIL PUBLIC_HOST HLS_SEGMENT HLS_VARIANT OFFLINE_SCREEN RTMP_PORT RTSP_PORT FIREWALL FIREWALL_EXTRA HLS_CDN_SECRET)
 MTX_BIN=/usr/local/bin/mediamtx
 MTX_CONF=/etc/mediamtx/mediamtx.yml
 MTX_HOME=/var/lib/mediamtx
@@ -41,6 +43,7 @@ SELF_BIN=/usr/local/bin/vrc-stream
 NGINX_SITE=/etc/nginx/sites-available/vrc-stream.conf
 NGINX_SNIPPET=/etc/nginx/snippets/vrc-stream.conf
 ACME_ROOT=/var/www/letsencrypt
+LE_LIVE=/etc/letsencrypt/live
 
 log()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
@@ -82,6 +85,7 @@ load_settings() {
 
   : "${STREAM_KEY:=}" "${DOMAIN:=}" "${EMAIL:=}" "${PUBLIC_HOST:=}"
   : "${HLS_SEGMENT:=1s}" "${HLS_VARIANT:=mpegts}" "${OFFLINE_SCREEN:=1}"
+  : "${FIREWALL:=1}" "${FIREWALL_EXTRA:=}"
   : "${RTMP_PORT:=1935}" "${RTSP_PORT:=8554}" "${HLS_CDN_SECRET:=}"
 }
 
@@ -94,6 +98,11 @@ validate_settings() {
     [[ $p == 80 || $p == 443 || $p == 8888 || $p == 9997 ]] && die "Порт $p занят nginx/MediaMTX"
   done
   [[ $RTMP_PORT != "$RTSP_PORT" ]] || die "RTMP_PORT и RTSP_PORT совпадают"
+  [[ $FIREWALL =~ ^[01]$ ]] || die "FIREWALL: 0 или 1"
+  local rule
+  for rule in $FIREWALL_EXTRA; do
+    [[ $rule =~ ^[0-9]{1,5}(/(tcp|udp))?$ ]] || die "FIREWALL_EXTRA: неверное правило \"$rule\" (пример: 25565/tcp)"
+  done
   if [[ -n $DOMAIN ]]; then
     [[ $DOMAIN =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || die "Некорректный DOMAIN: $DOMAIN"
   fi
@@ -137,7 +146,7 @@ public_host() {
   echo "${ip:-<IP_сервера>}"
 }
 
-have_cert() { [[ -n $DOMAIN && -s /etc/letsencrypt/live/$DOMAIN/fullchain.pem ]]; }
+have_cert() { [[ -n $DOMAIN && -s $LE_LIVE/$DOMAIN/fullchain.pem ]]; }
 
 # ---------------------------------------------------------------- установка
 
@@ -452,12 +461,80 @@ obtain_cert() {
   fi
 }
 
-open_firewall() {
-  if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
-    log "Открываю порты в ufw"
-    local p
-    for p in 80 443 "$RTMP_PORT" "$RTSP_PORT"; do ufw allow "$p/tcp" >/dev/null; done
+# Порты SSH, которые нельзя закрывать: из конфига sshd, по активным подключениям и всегда 22
+ssh_ports() {
+  {
+    echo 22
+    sshd -T 2>/dev/null | awk '$1 == "port" { print $2 }'
+    grep -hiE '^[[:space:]]*Port[[:space:]]+[0-9]+' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null \
+      | awk '{ print $2 }'
+    ss -Htlnp 2>/dev/null | awk '/"sshd"/ { n = split($4, a, ":"); print a[n] }'
+    [[ -n ${SSH_CONNECTION:-} ]] && awk '{ print $4 }' <<<"$SSH_CONNECTION"
+  } | grep -E '^[0-9]+$' | sort -un
+}
+
+# Порты, которые кто-то слушает снаружи, но которые не будут открыты в ufw
+closed_listening_ports() {
+  local allowed=" $* "
+  ss -Htuln 2>/dev/null | awk '{ print $1, $5 }' | while read -r proto addr; do
+    case $addr in 127.*|\[::1\]*|::1*) continue ;; esac
+    local port=${addr##*:}
+    [[ $proto == udp && $port =~ ^(68|546|5353)$ ]] && continue   # DHCP/mDNS клиента
+    [[ $allowed == *" $port/$proto "* || $allowed == *" $port "* ]] && continue
+    echo "$port/$proto"
+  done | sort -u | tr '\n' ' '
+}
+
+setup_firewall() {
+  if [[ $FIREWALL != 1 ]]; then
+    log "Фаервол: пропускаю (FIREWALL=0)"
+    return 0
   fi
+
+  if ! command -v ufw >/dev/null; then
+    log "Устанавливаю ufw"
+    apt-get install -y -q ufw
+  fi
+
+  local was_active=0 p ssh rules=() closed
+  ufw status 2>/dev/null | grep -q "Status: active" && was_active=1
+
+  ssh=$(ssh_ports | tr '\n' ' '); ssh=${ssh% }
+  for p in $ssh; do rules+=("$p/tcp:SSH"); done
+  # 80 открыт всегда: по нему Let's Encrypt проверяет домен при каждом продлении сертификата
+  rules+=("80/tcp:vrc-stream HTTP, Let's Encrypt" "443/tcp:vrc-stream HTTPS"
+          "$RTMP_PORT/tcp:vrc-stream RTMP (OBS)" "$RTSP_PORT/tcp:vrc-stream RTSP")
+  for p in $FIREWALL_EXTRA; do rules+=("$p:vrc-stream extra"); done
+
+  for p in "${rules[@]}"; do
+    ufw allow "${p%%:*}" comment "${p#*:}" >/dev/null
+  done
+
+  if (( was_active )); then
+    log "ufw уже включён — добавлены правила: SSH ($ssh), 80, 443, $RTMP_PORT, $RTSP_PORT${FIREWALL_EXTRA:+, $FIREWALL_EXTRA}"
+    return 0
+  fi
+
+  # Включаем впервые: по умолчанию закрыто всё входящее, кроме разрешённого выше
+  closed=$(closed_listening_ports $ssh 80 443 "$RTMP_PORT" "$RTSP_PORT" $FIREWALL_EXTRA)
+  ufw default deny incoming >/dev/null
+  ufw default allow outgoing >/dev/null
+  ufw --force enable >/dev/null
+  log "ufw включён: открыты SSH ($ssh), 80, 443, $RTMP_PORT, $RTSP_PORT${FIREWALL_EXTRA:+, $FIREWALL_EXTRA}"
+  if [[ -n ${closed// /} ]]; then
+    warn "Эти порты слушаются на сервере, но теперь закрыты фаерволом: $closed"
+    warn "Если они нужны снаружи: sudo FIREWALL_EXTRA=\"${closed% }\" vrc-stream install"
+  fi
+}
+
+# 80 и 443 не закрываем никогда: 80 нужен Let's Encrypt для продления сертификата,
+# 443 — HTTPS; SSH тоже остаётся открытым
+remove_firewall_rules() {
+  command -v ufw >/dev/null || return 0
+  local p
+  for p in "$RTMP_PORT/tcp" "$RTSP_PORT/tcp" $FIREWALL_EXTRA; do
+    ufw delete allow "$p" >/dev/null 2>&1 || true
+  done
 }
 
 wait_ready() {
@@ -502,8 +579,8 @@ cmd_install() {
   systemctl restart mediamtx
   wait_ready
 
+  setup_firewall
   obtain_cert
-  open_firewall
   install_self
   write_heal_timer
 
@@ -567,6 +644,7 @@ cmd_status() {
       printf '%-9s \033[1;31mНЕ РАБОТАЕТ\033[0m  (sudo journalctl -u %s -n 50)\n' "$svc:" "$svc"
     fi
   done
+  cert_status
 
   local a b
   a=$(curl -fsS --max-time 3 "$MTX_API/v3/paths/list") || die "API MediaMTX недоступно"
@@ -600,6 +678,24 @@ cmd_status() {
   live=$(jq -r --arg n "$STREAM_PATH" \
     '[.items[] | select(.name == $n) | (if has("online") then .online else .ready end)][0] // false' <<<"$b")
   hls_latency_check "$live"
+}
+
+# Срок действия сертификата. certbot продлевает его сам за 30 дней до конца
+# (проверка домена идёт через порт 80) — если осталось меньше 20 дней, продление не срабатывает.
+cert_status() {
+  if [[ -r $SETTINGS_FILE ]]; then load_settings; fi
+  [[ -n ${DOMAIN:-} ]] || return 0
+  local crt=$LE_LIVE/$DOMAIN/fullchain.pem end days
+  if [[ ! -r $crt ]]; then
+    echo "HTTPS:    сертификат для $DOMAIN не найден (или нужен sudo)"
+    return 0
+  fi
+  end=$(openssl x509 -enddate -noout -in "$crt" | cut -d= -f2)
+  days=$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))
+  echo "HTTPS:    сертификат $DOMAIN действует ещё $days дн. (продлевается автоматически)"
+  if (( days < 20 )); then
+    warn "Сертификат не продлился вовремя. Проверьте: sudo certbot renew --dry-run (порт 80 должен быть открыт)"
+  fi
 }
 
 # TARGETDURATION и самый длинный сегмент в текущем HLS-плейлисте: "5 1.0".
@@ -711,6 +807,7 @@ EOF
 
 cmd_uninstall() {
   log "Удаляю vrc-stream"
+  if [[ -r $SETTINGS_FILE ]]; then load_settings; remove_firewall_rules; fi
   systemctl disable --now vrc-stream-heal.timer mediamtx 2>/dev/null || true
   rm -f /etc/systemd/system/vrc-stream-heal.service /etc/systemd/system/vrc-stream-heal.timer
   rm -f /etc/systemd/system/mediamtx.service
