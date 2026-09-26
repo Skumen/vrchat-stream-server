@@ -1,5 +1,10 @@
 # VRChat Stream Server
 
+**Русский** | [English](README.en.md)
+
+[![Tests](https://github.com/Skumen/vrchat-stream-server/actions/workflows/tests.yml/badge.svg)](https://github.com/Skumen/vrchat-stream-server/actions/workflows/tests.yml)
+[![Release](https://img.shields.io/github/v/release/Skumen/vrchat-stream-server)](https://github.com/Skumen/vrchat-stream-server/releases/latest)
+
 Свой стрим-сервер для видеоплееров VRChat. OBS отправляет поток на сервер, а сервер раздаёт его сразу в трёх форматах, чтобы у каждого зрителя была рабочая ссылка:
 
 ```
@@ -11,6 +16,9 @@ OBS ──RTMP:1935──▶ MediaMTX ┼─ RTMP  rtmp://…/live/stream       
 
 - **[MediaMTX](https://github.com/bluenviron/mediamtx)** принимает поток от OBS и раздаёт его по RTSP, RTMP и HLS без перекодирования, поэтому почти не нагружает процессор.
 - **nginx** раздаёт HLS наружу по HTTP и HTTPS и получает сертификат Let's Encrypt.
+- **ufw и fail2ban** закрывают лишние порты и банят тех, кто подбирает ключ OBS.
+
+Проверено в **VRChat на PC и на Quest**.
 
 ## Быстрая установка
 
@@ -21,46 +29,49 @@ curl -fsSL https://github.com/Skumen/vrchat-stream-server/releases/latest/downlo
 sudo DOMAIN=stream.example.com bash setup.sh
 ```
 
-Команда скачивает скрипт из [последнего релиза](https://github.com/Skumen/vrchat-stream-server/releases/latest). Там же лежит архив `obs-profiles.zip` с готовыми профилями для OBS.
-
 Замените `stream.example.com` на свой домен. Если домена нет, запустите просто `sudo bash setup.sh`: сервер будет работать по HTTP.
 
-Через несколько минут скрипт выведет готовые настройки для OBS и ссылки для VRChat. Дальше откройте порты (см. ниже) и настройте OBS по [OBS-settings.md](OBS-settings.md).
+Через несколько минут скрипт выведет готовые настройки для OBS и ссылки для VRChat. Дальше:
+1. Откройте порты у провайдера (см. ниже).
+2. Настройте OBS готовым профилем из [`obs-profiles.zip`](https://github.com/Skumen/vrchat-stream-server/releases/latest/download/obs-profiles.zip) (**Профиль → Импорт**) или по [OBS-settings.md](OBS-settings.md).
 
 ## Установка подробно
 
-Скрипт можно скачать командой выше или скопировать на VM вручную. Запуск без HTTPS:
+**HTTPS** рекомендуется: с ним надёжнее работает Quest. Нужен домен, A-запись которого указывает на сервер. Бесплатный можно взять, например, на [DuckDNS](https://www.duckdns.org). Сертификат продлевается автоматически. Почта не обязательна: `EMAIL=you@example.com` только привяжет её к аккаунту Let's Encrypt.
 
-```bash
-sudo bash setup.sh
-```
+**Порты у провайдера.** Если VM в облаке, откройте в панели провайдера (security group / firewall) входящие **TCP 80, 443, 1935, 8554**.
 
-С HTTPS (рекомендуется, так надёжнее для Quest). Нужен домен, A-запись которого указывает на сервер:
-
-```bash
-sudo DOMAIN=stream.example.com bash setup.sh
-```
-
-Бесплатный домен можно взять, например, на [DuckDNS](https://www.duckdns.org). Сертификат продлевается автоматически. Почту указывать не обязательно: `EMAIL=you@example.com` только привяжет её к аккаунту Let's Encrypt.
-
-В конце скрипт выведет готовые настройки для OBS и ссылки для VRChat. Потом их можно вывести снова командой `sudo vrc-stream info`.
-
-**Порты.** Если VM в облаке, откройте в панели провайдера (security group / firewall) входящие **TCP 80, 443, 1935, 8554**.
+**Свежая VM.** Сразу после создания Ubuntu ставит обновления в фоне и занимает apt. Скрипт это видит, ждёт (раз в 30 секунд пишет, что ждёт) и продолжает, как только apt освободится.
 
 **Фаервол на самой VM (ufw)** скрипт настраивает сам. Если ufw нет, установит его. Если ufw выключен, включит. Если уже включён, только добавит правила.
 - **SSH не закрывается.** Скрипт определяет порт SSH (из конфига sshd, по активным подключениям и всегда 22) и разрешает его **до** включения ufw.
-- **Открыты** 80, 443, 1935, 8554. **Порт 80 открыт всегда:** через него Let's Encrypt проверяет домен при каждом продлении сертификата. Даже `vrc-stream uninstall` не закрывает 80, 443 и SSH.
-- **Всё остальное входящее закрыто.** Если на сервере есть другие сервисы, скрипт перечислит их порты и подскажет, как открыть: `sudo FIREWALL_EXTRA="25565/tcp 7777/udp" vrc-stream install`.
-- **Не трогать фаервол:** `sudo FIREWALL=0 bash setup.sh`.
+- **Открыты** 80, 443, 1935, 8554. **Порт 80 открыт всегда:** через него Let's Encrypt проверяет домен при каждом продлении сертификата. Даже `uninstall` не закрывает 80, 443 и SSH.
+- **Всё остальное входящее закрыто.** Если на VM есть другие сервисы, скрипт перечислит их порты и подскажет команду вида `sudo FIREWALL_EXTRA="25565/tcp 7777/udp" vrc-stream install`.
+- **Не трогать фаервол:** `FIREWALL=0`.
 
-Скрипт можно запускать повторно. Он сам уберёт старую установку на `nginx-rtmp` (блок `rtmp{}`, `SK.conf`, tmpfs) и сохранит бэкап `/etc/nginx` в `/root/vrc-stream-backups/`.
+> При первом включении ufw держите открытой консоль (VNC) в панели провайдера. Если доступ по SSH всё же пропадёт, выполните в ней `sudo ufw disable`.
 
-**Обновление до свежей версии из репозитория.** Скачайте скрипт той же командой `curl` и запустите `sudo bash setup.sh`. Сохранённые настройки (ключ, домен и т.д.) останутся.
+**fail2ban** банит IP, которые подбирают ключ OBS: **20 неудачных попыток за 10 минут → бан на 30 минут**.
+- Правило мягкое специально: OBS с опечаткой в ключе переподключается каждые пару секунд, и стример не должен надолго заблокировать сам себя.
+- Кто заблокирован, покажет `sudo vrc-stream status`. Разбанить: `sudo vrc-stream unban <IP>` (или `all`).
+- Заодно fail2ban защищает SSH. На Debian 12 скрипт переключает SSH-правило на журнал systemd, иначе fail2ban там не запускается.
+- Выключить: `FAIL2BAN=0`.
+
+**Повторный запуск** безопасен. Скрипт уберёт старую установку на `nginx-rtmp` (блок `rtmp{}`, `SK.conf`, tmpfs) и сохранит бэкап `/etc/nginx` в `/root/vrc-stream-backups/`.
+
+## Обновление
+
+```bash
+sudo vrc-stream update           # до последней версии
+vrc-stream update --check        # только проверить, есть ли новая
+sudo vrc-stream update v1.0.3    # конкретная версия (например, откат)
+```
+
+Скрипт скачивается из релиза на GitHub. Перед установкой проверяются контрольная сумма из `SHA256SUMS.txt` и синтаксис. Ключ OBS, домен и остальные настройки сохраняются.
 
 ## Настройка OBS
 
 > Полная инструкция с профилями качества, настройками для NVIDIA/AMD/Intel/x264 и решением проблем — в [OBS-settings.md](OBS-settings.md).
-> Готовые профили для импорта в OBS (**Профиль → Импорт**) лежат в папке [`obs-profiles`](obs-profiles).
 
 **Настройки → Трансляция**
 - Сервис: *Настраиваемый…*
@@ -98,14 +109,16 @@ sudo DOMAIN=stream.example.com bash setup.sh
 ## Управление
 
 ```bash
-sudo vrc-stream info       # настройки OBS и ссылки
-sudo vrc-stream status     # эфир, дорожки, битрейт, зрители, задержка HLS, срок сертификата
-sudo vrc-stream logs       # логи MediaMTX в реальном времени
-sudo vrc-stream restart    # перезапуск
-sudo vrc-stream new-key    # новый ключ для OBS (если старый утёк)
-sudo vrc-stream install    # применить новые настройки / обновить
-sudo vrc-stream uninstall  # удалить
-vrc-stream version         # версия
+sudo vrc-stream info            # настройки OBS и ссылки
+sudo vrc-stream status          # эфир, зрители, задержка HLS, срок сертификата, баны
+sudo vrc-stream logs            # логи MediaMTX в реальном времени
+sudo vrc-stream restart         # перезапуск
+sudo vrc-stream new-key         # новый ключ для OBS (если старый утёк)
+sudo vrc-stream update          # обновление с GitHub
+sudo vrc-stream unban <IP|all>  # разбанить в fail2ban
+sudo vrc-stream install         # применить новые настройки
+sudo vrc-stream uninstall       # удалить
+vrc-stream version              # версия
 ```
 
 ### Автосброс задержки HLS
@@ -130,6 +143,8 @@ vrc-stream version         # версия
 | `RTMP_PORT`, `RTSP_PORT` | `1935`, `8554` | Порты |
 | `FIREWALL` | `1` | Установить и настроить ufw. `0` — не трогать фаервол |
 | `FIREWALL_EXTRA` | — | Дополнительные открытые порты через пробел, например `"25565/tcp 7777/udp"` |
+| `FAIL2BAN` | `1` | Банить IP, подбирающие ключ OBS. `0` выключает |
+| `APT_WAIT_MAX` | `900` | Сколько секунд ждать, пока система ставит обновления (не сохраняется) |
 
 ### Заставка вместо обрыва (включена по умолчанию)
 
@@ -146,6 +161,7 @@ vrc-stream version         # версия
 | Симптом | Что проверить |
 |---|---|
 | OBS не подключается | `sudo vrc-stream logs`: `authentication failed` — неверный ключ; `audio configuration does not match` — в OBS аудио 44.1 кГц, нужно 48 кГц (Настройки → Аудио → Частота дискретизации). Порт 1935 должен быть открыт у провайдера |
+| OBS не подключается даже с верным ключом | Возможно, после попыток с неверным ключом ваш IP забанил fail2ban: `sudo vrc-stream status`, затем `sudo vrc-stream unban <IP>` |
 | Не грузит ни у кого | `sudo vrc-stream status`: идёт ли эфир. Порты 80/443 открыты у провайдера? Ссылка открывается в браузере? |
 | Перестал работать другой сервис на VM | Его порт закрыл ufw. Откройте его: `sudo FIREWALL_EXTRA="порт/tcp" vrc-stream install` |
 | `status` пишет «Сертификат не продлился вовремя» | `sudo certbot renew --dry-run` покажет причину. Обычно это закрытый порт 80 у провайдера или изменённая DNS-запись |
@@ -153,25 +169,33 @@ vrc-stream version         # версия
 | Работает на PC, не работает на Quest | Для Quest используйте HLS-ссылку (не `rtspt://` и не `rtmp://`), лучше с HTTPS. В OBS нужен H.264 |
 | `rtspt://` не работает | Порт 8554/TCP закрыт у провайдера |
 | Часто подгружается | Поставьте `HLS_SEGMENT=2s` (и интервал ключевых кадров 2 с), снизьте битрейт |
-| Большая задержка HLS | `sudo vrc-stream status` покажет длину сегментов и ожидаемую задержку. Если сегменты длиннее 1 с — в OBS интервал ключевых кадров должен быть 1 s, а не «0/авто». Если сегменты по 1 с, но `TARGETDURATION` вырос (после обрыва связи с OBS), он сбросится сам, когда эфир закончится и зрители уйдут (см. «Автосброс задержки HLS»). Сразу: `sudo vrc-stream restart`, но зрителям придётся перезапустить видео |
+| Большая задержка HLS | `sudo vrc-stream status` покажет длину сегментов и ожидаемую задержку. Если сегменты длиннее 1 с — в OBS интервал ключевых кадров должен быть 1 s, а не «0/авто». Если сегменты по 1 с, но `TARGETDURATION` вырос (после обрыва связи с OBS), он сбросится сам, когда эфир закончится и зрители уйдут. Сразу: `sudo vrc-stream restart`, но зрителям придётся перезапустить видео |
 
 ## Что проверено
 
-**Установка на реальной VM** (1 vCPU AMD EPYC, 2 ГБ ОЗУ, домен с HTTPS) выполнена одной командой из [быстрой установки](#быстрая-установка). Трансляция из OBS проверена в **VRChat на PC**, в **VRChat на Quest** и в браузере.
+**Вручную, на реальной VM** (1 vCPU AMD EPYC, 2 ГБ ОЗУ, домен с HTTPS): установка одной командой, трансляция из OBS в **VRChat на PC**, в **VRChat на Quest** и в браузере. Снаружи, из интернета, проверены HTTPS, HLS, RTSP, RTMP, защита ключом, закрытые служебные порты и заставка.
 
-Проверки сервера снаружи, из интернета:
+**Автоматически, на каждый push** ([GitHub Actions](https://github.com/Skumen/vrchat-stream-server/actions)):
+- ShellCheck всех скриптов.
+- Unit-тесты: настройки, фаервол, fail2ban, ожидание apt, автосброс задержки, `update`, срок сертификата, генерация конфигов, профили OBS. Системные команды (`ufw`, `apt-get`, `systemctl`…) подменены.
+- Интеграционные тесты с настоящим MediaMTX: ключ OBS, HLS, RTSP, заставка, `status`. Фильтр fail2ban проверяется настоящим `fail2ban-regex`.
 
-| Проверка | Результат |
-|---|---|
-| HTTPS, сертификат Let's Encrypt | ✅ действителен, выдан автоматически |
-| HLS по HTTPS и HTTP | ✅ обычный плейлист без редиректов и cookie, сегменты по 1 с, корректный MPEG-TS |
-| Воспроизведение HLS в браузере (hls.js) | ✅ 1920×1080, видео идёт |
-| Приём потока по RTSP (TCP), RTMP и HLS | ✅ поток приходит по всем трём протоколам |
-| RTSP через UDP | ✅ отклоняется (461), остаётся только TCP, который проходит через любой NAT |
-| Публикация без ключа или с чужим ключом | ✅ отклоняется (`Unauthorized`) |
-| Служебные порты MediaMTX (API 9997, HLS 8888) | ✅ снаружи недоступны |
-| Заставка, пока OBS не в эфире | ✅ поток идёт без OBS |
-| VRChat на PC | ✅ проверено вручную |
-| VRChat на Quest | ✅ проверено вручную |
+Если что-то не работает, откройте [Issue](https://github.com/Skumen/vrchat-stream-server/issues) и приложите вывод `sudo vrc-stream status` и `sudo vrc-stream logs`.
 
-Автосброс задержки HLS, настройка ufw и проверка срока сертификата (добавлены в 1.0.2) проверены автотестами на имитации сервера: подставные `ufw`, `ss`, `sshd`, `systemctl` и настоящий MediaMTX. Если что-то не работает, откройте [Issue](https://github.com/Skumen/vrchat-stream-server/issues) и приложите вывод `sudo vrc-stream status` и `sudo vrc-stream logs`.
+## Для разработчиков
+
+```bash
+tests/run.sh unit          # быстрые тесты, ничего не меняют в системе
+tests/run.sh integration   # с настоящим MediaMTX (скачается в tests/.cache)
+tests/run.sh               # всё
+```
+
+Нужны `bash`, `jq`, `curl`, `openssl`. Для проверки фильтра fail2ban нужен `fail2ban-regex`, без него этот тест пропускается.
+
+**Выпуск релиза.** Поднимите `VRC_STREAM_VERSION` в `setup.sh`, добавьте описание в `docs/releases/vX.Y.Z.md` (первая строка — заголовок) и отправьте тег:
+
+```bash
+git tag -a v1.2.0 -m "vrc-stream 1.2.0" && git push origin v1.2.0
+```
+
+GitHub Actions прогонит тесты, соберёт `setup.sh`, `obs-profiles.zip`, `SHA256SUMS.txt` и опубликует релиз.

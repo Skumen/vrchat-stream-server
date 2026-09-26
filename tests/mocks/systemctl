@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Подставной systemctl: пишет вызовы в журнал; is-active — код из $MOCK_SVC_RC (по умолчанию 0)
+echo "systemctl $*" >> "$MOCK_LOG"
+[[ ${1:-} == is-active ]] && exit "${MOCK_SVC_RC:-0}"
+exit 0

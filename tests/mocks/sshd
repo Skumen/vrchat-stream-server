@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Подставной sshd: `sshd -T` сообщает порт из $MOCK_SSHD_PORT (по умолчанию 22)
+[[ ${1:-} == -T ]] && echo "port ${MOCK_SSHD_PORT:-22}"
+exit 0

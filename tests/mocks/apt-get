@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Подставной apt-get: пишет вызовы в журнал; падает, если есть $MOCK_STATE/apt_fail.
+# «Устанавливает» подставные ufw и fail2ban-client, если их просили.
+echo "apt-get $*" >> "$MOCK_LOG"
+[[ -f $MOCK_STATE/apt_fail ]] && exit 100
+for pkg in "$@"; do
+  case $pkg in
+    ufw)      cp "$MOCK_DIR/ufw" "$MOCK_BIN/ufw" ;;
+    fail2ban) cp "$MOCK_DIR/fail2ban-client" "$MOCK_BIN/fail2ban-client" ;;
+  esac
+done
+chmod +x "$MOCK_BIN"/* 2>/dev/null
+exit 0

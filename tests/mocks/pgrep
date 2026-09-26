@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Подставной pgrep: «apt занят» столько проверок, сколько записано в $MOCK_STATE/apt_busy
+n=$(cat "$MOCK_STATE/apt_busy" 2>/dev/null || echo 0)
+(( n > 0 )) || exit 1
+echo $(( n - 1 )) > "$MOCK_STATE/apt_busy"
+echo "6953 unattended-upgr"

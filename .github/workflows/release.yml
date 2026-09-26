@@ -1,0 +1,53 @@
+name: Release
+
+# Релиз выпускается отправкой тега:  git tag -a v1.2.0 -m "..." && git push origin v1.2.0
+# Перед этим: VRC_STREAM_VERSION в setup.sh = 1.2.0 и описание в docs/releases/v1.2.0.md
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  release:
+    name: Публикация релиза
+    needs: tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Версия в setup.sh совпадает с тегом
+        run: |
+          v=$(sed -n 's/^VRC_STREAM_VERSION=//p' setup.sh)
+          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::В setup.sh VRC_STREAM_VERSION=$v, а тег $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      - name: Описание релиза
+        run: |
+          notes="docs/releases/$GITHUB_REF_NAME.md"
+          if [ ! -f "$notes" ]; then
+            echo "::error::Нет файла с описанием релиза: $notes"
+            exit 1
+          fi
+          head -n 1 "$notes" | sed 's/^# *//' > /tmp/title
+          tail -n +2 "$notes" > /tmp/notes.md
+
+      - name: Файлы релиза
+        run: |
+          mkdir dist
+          cp setup.sh dist/
+          git archive --format=zip -o dist/obs-profiles.zip HEAD obs-profiles
+          cd dist && sha256sum setup.sh obs-profiles.zip > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Публикация
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/setup.sh dist/obs-profiles.zip dist/SHA256SUMS.txt \
+            --title "$(cat /tmp/title)" --notes-file /tmp/notes.md --verify-tag

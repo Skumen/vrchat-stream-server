@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Подставной ufw: пишет вызовы в журнал; «включён», если есть $MOCK_STATE/ufw_active
+echo "ufw $*" >> "$MOCK_LOG"
+case ${1:-} in
+  status) if [[ -f $MOCK_STATE/ufw_active ]]; then echo "Status: active"; else echo "Status: inactive"; fi ;;
+  --force) [[ ${2:-} == enable ]] && touch "$MOCK_STATE/ufw_active" ;;
+esac
+exit 0

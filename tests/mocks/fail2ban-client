@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Подставной fail2ban-client: забаненные IP — в $MOCK_STATE/f2b_banned (через пробел)
+echo "fail2ban-client $*" >> "$MOCK_LOG"
+[[ -f $MOCK_STATE/f2b_down ]] && exit 255
+banned=$(cat "$MOCK_STATE/f2b_banned" 2>/dev/null)
+case "$*" in
+  "status vrc-stream")
+    n=$(wc -w <<<"$banned")
+    printf 'Status for the jail: vrc-stream\n|- Filter\n|  |- Currently failed:\t0\n'
+    printf '|  `- Journal matches:\t_SYSTEMD_UNIT=mediamtx.service\n`- Actions\n'
+    printf '   |- Currently banned:\t%s\n   |- Total banned:\t%s\n   `- Banned IP list:\t%s\n' "$n" "$n" "$banned"
+    ;;
+  "set vrc-stream unbanip "*)
+    ip=${*##* }
+    printf '%s' "$(tr ' ' '\n' <<<"$banned" | grep -vx "$ip" | tr '\n' ' ')" > "$MOCK_STATE/f2b_banned"
+    echo 1
+    ;;
+  "unban --all") : > "$MOCK_STATE/f2b_banned"; echo 0 ;;
+esac
+exit 0

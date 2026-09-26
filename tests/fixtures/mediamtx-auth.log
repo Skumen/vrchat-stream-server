@@ -1,0 +1,8 @@
+2026/09/26 15:18:54 INF MediaMTX v1.21.1, linux, amd64
+2026/09/26 15:18:55 INF [RTMP] [conn 203.0.113.7:52774] opened
+2026/09/26 15:18:55 WAR [RTMP] [conn 203.0.113.7:52775] failed to authenticate: authentication failed
+2026/09/26 15:18:55 INF [RTMP] [conn 203.0.113.7:52775] closed: failed to authenticate: authentication failed
+2026/09/26 15:18:58 WAR [RTMP] [conn 198.51.100.9:40000] failed to authenticate: authentication failed
+2026/09/26 15:18:58 WAR [RTSP] [conn [2001:db8::5]:41000] failed to authenticate: authentication failed
+2026/09/26 15:19:00 INF [RTMP] [conn 192.0.2.10:52778] is publishing to path 'live/stream'
+2026/09/26 15:19:03 INF [RTSP] [conn 192.0.2.20:52787] closed: EOF

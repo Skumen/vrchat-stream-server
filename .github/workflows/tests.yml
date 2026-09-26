@@ -1,0 +1,45 @@
+name: Tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ShellCheck + тесты
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Инструменты (jq, fail2ban, ShellCheck 0.11.0)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q jq fail2ban
+          curl -fsSL -o /tmp/sc.tar.xz \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/sc.tar.xz -C /tmp
+          sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+          shellcheck --version
+
+      - name: ShellCheck
+        run: shellcheck -x -s bash setup.sh tests/*.sh tests/unit/*.sh tests/integration/*.sh tests/mocks/*
+
+      - name: Unit-тесты
+        run: tests/run.sh unit
+
+      - name: MediaMTX для интеграционных тестов
+        id: mediamtx
+        run: echo "bin=$(tests/get-mediamtx.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Интеграционные тесты (MediaMTX, fail2ban-regex)
+        env:
+          MEDIAMTX_BIN: ${{ steps.mediamtx.outputs.bin }}
+        run: tests/run.sh integration

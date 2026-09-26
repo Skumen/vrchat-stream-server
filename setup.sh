@@ -10,7 +10,7 @@
 #   sudo DOMAIN=stream.example.com bash setup.sh      # + HTTPS (Let's Encrypt)
 #
 # После установки скрипт доступен как команда `vrc-stream`:
-#   sudo vrc-stream info | status | logs | restart | new-key | install | uninstall
+#   sudo vrc-stream info | status | logs | restart | new-key | update | unban | install | uninstall
 #
 # Настройки (переменные окружения; запоминаются в /etc/vrc-stream/settings.env):
 #   STREAM_KEY      пароль для OBS (по умолчанию генерируется)
@@ -24,14 +24,18 @@
 #   RTSP_PORT       8554
 #   FIREWALL        1 (по умолчанию) — установить и настроить ufw (SSH не закрывается). 0 — не трогать
 #   FIREWALL_EXTRA  дополнительные открытые порты через пробел, например "25565/tcp 7777/udp"
+#   FAIL2BAN        1 (по умолчанию) — банить IP, подбирающие ключ OBS. 0 — выключить
 #   MEDIAMTX_VERSION  версия MediaMTX (по умолчанию v1.21.1)
+#   APT_WAIT_MAX    сколько секунд ждать, пока система ставит обновления (по умолчанию 900)
 set -euo pipefail
 
-VRC_STREAM_VERSION=1.0.3
+VRC_STREAM_VERSION=1.1.0
+VRC_STREAM_REPO="${VRC_STREAM_REPO:-Skumen/vrchat-stream-server}"
 MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-v1.21.1}"
 SETTINGS_DIR=/etc/vrc-stream
 SETTINGS_FILE=$SETTINGS_DIR/settings.env
-SETTINGS_VARS=(STREAM_KEY DOMAIN EMAIL PUBLIC_HOST HLS_SEGMENT HLS_VARIANT OFFLINE_SCREEN RTMP_PORT RTSP_PORT FIREWALL FIREWALL_EXTRA HLS_CDN_SECRET)
+SETTINGS_VARS=(STREAM_KEY DOMAIN EMAIL PUBLIC_HOST HLS_SEGMENT HLS_VARIANT OFFLINE_SCREEN RTMP_PORT RTSP_PORT
+               FIREWALL FIREWALL_EXTRA FAIL2BAN HLS_CDN_SECRET)
 MTX_BIN=/usr/local/bin/mediamtx
 MTX_CONF=/etc/mediamtx/mediamtx.yml
 MTX_HOME=/var/lib/mediamtx
@@ -44,25 +48,34 @@ NGINX_SITE=/etc/nginx/sites-available/vrc-stream.conf
 NGINX_SNIPPET=/etc/nginx/snippets/vrc-stream.conf
 ACME_ROOT=/var/www/letsencrypt
 LE_LIVE=/etc/letsencrypt/live
+F2B_JAIL=/etc/fail2ban/jail.d/vrc-stream.conf
+F2B_SSHD=/etc/fail2ban/jail.d/vrc-stream-sshd.conf
+F2B_FILTER=/etc/fail2ban/filter.d/vrc-stream-mediamtx.conf
+F2B_NAME=vrc-stream
+SYSTEMD_DIR=/etc/systemd/system
 
 log()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 
-need_root() { [[ $EUID -eq 0 ]] || die "Нужны права root: sudo $0 $*"; }
+need_root() { [[ $EUID -eq 0 ]] || die "Нужны права root: запустите через sudo"; }
 
 usage() {
   echo "vrc-stream $VRC_STREAM_VERSION — стрим-сервер для VRChat"
   cat <<'EOF'
 
-  sudo vrc-stream info       ссылки для OBS и VRChat
-  sudo vrc-stream status     идёт ли эфир, битрейт, число зрителей
-  sudo vrc-stream logs       логи MediaMTX (Ctrl+C — выход)
-  sudo vrc-stream restart    перезапустить сервисы
-  sudo vrc-stream new-key    сгенерировать новый ключ для OBS
-  sudo vrc-stream install    переустановить / применить настройки
-  sudo vrc-stream uninstall  удалить сервер
-  vrc-stream version         версия
+  sudo vrc-stream info            ссылки для OBS и VRChat
+  sudo vrc-stream status          эфир, зрители, задержка, сертификат, баны
+  sudo vrc-stream logs            логи MediaMTX (Ctrl+C — выход)
+  sudo vrc-stream restart         перезапустить сервисы
+  sudo vrc-stream new-key         сгенерировать новый ключ для OBS
+  sudo vrc-stream update          обновиться до последней версии с GitHub
+       vrc-stream update --check  только проверить, есть ли новая версия
+  sudo vrc-stream update v1.0.3   установить конкретную версию
+  sudo vrc-stream unban <IP|all>  разбанить IP (fail2ban)
+  sudo vrc-stream install         применить настройки / переустановить
+  sudo vrc-stream uninstall       удалить сервер
+  vrc-stream version              версия
 
 Настройки меняются так:  sudo HLS_SEGMENT=2s vrc-stream install
 EOF
@@ -85,7 +98,7 @@ load_settings() {
 
   : "${STREAM_KEY:=}" "${DOMAIN:=}" "${EMAIL:=}" "${PUBLIC_HOST:=}"
   : "${HLS_SEGMENT:=1s}" "${HLS_VARIANT:=mpegts}" "${OFFLINE_SCREEN:=1}"
-  : "${FIREWALL:=1}" "${FIREWALL_EXTRA:=}"
+  : "${FIREWALL:=1}" "${FIREWALL_EXTRA:=}" "${FAIL2BAN:=1}"
   : "${RTMP_PORT:=1935}" "${RTSP_PORT:=8554}" "${HLS_CDN_SECRET:=}"
 }
 
@@ -99,6 +112,7 @@ validate_settings() {
   done
   [[ $RTMP_PORT != "$RTSP_PORT" ]] || die "RTMP_PORT и RTSP_PORT совпадают"
   [[ $FIREWALL =~ ^[01]$ ]] || die "FIREWALL: 0 или 1"
+  [[ $FAIL2BAN =~ ^[01]$ ]] || die "FAIL2BAN: 0 или 1"
   local rule
   for rule in $FIREWALL_EXTRA; do
     [[ $rule =~ ^[0-9]{1,5}(/(tcp|udp))?$ ]] || die "FIREWALL_EXTRA: неверное правило \"$rule\" (пример: 25565/tcp)"
@@ -159,11 +173,20 @@ check_os() {
 # блокировку apt. Ждём его, а не падаем с "Could not get lock".
 APT_WAIT_MAX=${APT_WAIT_MAX:-900}
 
+# Имена процессов, которые сейчас держат apt ("unattended-upgr dpkg"), или пусто
+apt_busy() {
+  pgrep -l -x 'apt|apt-get|aptitude|dpkg|unattended-upgr' 2>/dev/null \
+    | awk '{ print $2 }' | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+
+# Проверяем каждые 5 с и продолжаем, как только apt освободится; раз в 30 с пишем, что ждём
 wait_for_apt() {
-  local waited=0
-  while pgrep -x 'apt|apt-get|aptitude|dpkg|unattended-upgr' >/dev/null; do
+  local waited=0 who
+  while who=$(apt_busy); [[ -n $who ]]; do
     if (( waited == 0 )); then
-      log "Система устанавливает обновления (apt занят) — жду, до $(( APT_WAIT_MAX / 60 )) мин…"
+      log "Система устанавливает обновления (apt занят: $who) — жду, продолжу сразу, как освободится"
+    elif (( waited % 30 == 0 )); then
+      log "…всё ещё жду: $(( waited / 60 )):$(printf '%02d' $(( waited % 60 ))) (apt занят: $who)"
     fi
     if (( waited >= APT_WAIT_MAX )); then
       die "apt занят дольше $(( APT_WAIT_MAX / 60 )) мин. Запустите скрипт ещё раз чуть позже"
@@ -359,7 +382,7 @@ EOF
 }
 
 write_mediamtx_service() {
-  cat > /etc/systemd/system/mediamtx.service <<EOF
+  cat > "$SYSTEMD_DIR/mediamtx.service" <<EOF
 [Unit]
 Description=MediaMTX (vrc-stream)
 After=network-online.target
@@ -544,6 +567,7 @@ setup_firewall() {
   fi
 
   # Включаем впервые: по умолчанию закрыто всё входящее, кроме разрешённого выше
+  # shellcheck disable=SC2086  # $ssh и $FIREWALL_EXTRA — списки через пробел
   closed=$(closed_listening_ports $ssh 80 443 "$RTMP_PORT" "$RTSP_PORT" $FIREWALL_EXTRA)
   ufw default deny incoming >/dev/null
   ufw default allow outgoing >/dev/null
@@ -565,9 +589,120 @@ remove_firewall_rules() {
   done
 }
 
+# ---------------------------------------------------------------- fail2ban
+
+# Банит IP, которые раз за разом пытаются публиковать с неверным ключом.
+# Правило мягкое: OBS с опечаткой в ключе переподключается каждые пару секунд,
+# и стример не должен надолго заблокировать сам себя.
+setup_fail2ban() {
+  if [[ $FAIL2BAN != 1 ]]; then
+    log "fail2ban: пропускаю (FAIL2BAN=0)"
+    remove_fail2ban
+    return 0
+  fi
+
+  if ! command -v fail2ban-client >/dev/null; then
+    log "Устанавливаю fail2ban"
+    if ! apt_get install -y -q fail2ban python3-systemd; then
+      warn "Не удалось установить fail2ban — пропускаю. Повторите позже: sudo vrc-stream install"
+      return 0
+    fi
+  fi
+
+  # Бан через тот же фаервол, что стоит в системе
+  local banaction=iptables-multiport
+  if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+    banaction=ufw
+  elif command -v nft >/dev/null; then
+    banaction=nftables-multiport
+  fi
+
+  write_fail2ban_filter
+  mkdir -p "$(dirname "$F2B_JAIL")"
+  cat > "$F2B_JAIL" <<EOF
+# Сгенерировано vrc-stream. Разбанить: sudo vrc-stream unban <IP>
+[$F2B_NAME]
+enabled      = true
+backend      = systemd
+journalmatch = _SYSTEMD_UNIT=mediamtx.service
+filter       = vrc-stream-mediamtx
+port         = $RTMP_PORT,$RTSP_PORT
+banaction    = $banaction
+maxretry     = 20
+findtime     = 10m
+bantime      = 30m
+EOF
+
+  # Штатный jail для SSH читает /var/log/auth.log, которого нет на системах только с journald
+  # (например Debian 12) — тогда fail2ban не запускается вовсе. Переключаем его на journald.
+  cat > "$F2B_SSHD" <<'EOF'
+# Сгенерировано vrc-stream: SSH-jail читает журнал systemd
+[sshd]
+backend = systemd
+EOF
+
+  systemctl enable fail2ban >/dev/null 2>&1 || true
+  systemctl restart fail2ban
+  local _
+  for _ in $(seq 1 20); do
+    fail2ban-client status "$F2B_NAME" >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+  if fail2ban-client status "$F2B_NAME" >/dev/null 2>&1; then
+    log "fail2ban: бан после 20 неудачных попыток ключа за 10 мин, на 30 мин ($banaction)"
+  else
+    warn "fail2ban не запустился — проверьте: sudo journalctl -u fail2ban -n 30"
+  fi
+}
+
+# Фильтр: публикация в MediaMTX с неверным ключом (проверяется в tests/integration)
+write_fail2ban_filter() {
+  mkdir -p "$(dirname "$F2B_FILTER")"
+  cat > "$F2B_FILTER" <<'EOF'
+# Сгенерировано vrc-stream: публикация в MediaMTX с неверным ключом OBS, например
+# 2026/09/26 15:18:55 WAR [RTMP] [conn 203.0.113.7:52775] failed to authenticate: authentication failed
+[Definition]
+failregex = \[conn \[?<ADDR>\]?:\d+\] failed to authenticate: authentication failed
+ignoreregex =
+EOF
+}
+
+remove_fail2ban() {
+  [[ -f $F2B_JAIL || -f $F2B_FILTER ]] || return 0
+  rm -f "$F2B_JAIL" "$F2B_FILTER"
+  if command -v fail2ban-client >/dev/null; then systemctl restart fail2ban 2>/dev/null || true; fi
+}
+
+fail2ban_status() {
+  command -v fail2ban-client >/dev/null || return 0
+  local out n list
+  out=$(fail2ban-client status "$F2B_NAME" 2>/dev/null) || return 0
+  n=$(awk -F: '/Currently banned/ { gsub(/[ \t]/, "", $2); print $2 }' <<<"$out")
+  list=$(awk -F: '/Banned IP list/ { sub(/^[ \t]+/, "", $2); print $2 }' <<<"$out")
+  if [[ ${n:-0} == 0 ]]; then
+    echo "fail2ban: заблокированных IP нет"
+  else
+    echo "fail2ban: заблокировано IP: $n ($list). Разбанить: sudo vrc-stream unban <IP>"
+  fi
+}
+
+cmd_unban() {
+  local ip=${1:-}
+  [[ -n $ip ]] || die "Укажите IP: sudo vrc-stream unban 203.0.113.7  (или all)"
+  command -v fail2ban-client >/dev/null || die "fail2ban не установлен"
+  if [[ $ip == all ]]; then
+    fail2ban-client unban --all >/dev/null || die "fail2ban не ответил: sudo systemctl status fail2ban"
+    log "Разбанены все IP"
+  else
+    [[ $ip =~ ^[0-9A-Fa-f:.]+$ ]] || die "Некорректный IP: $ip"
+    fail2ban-client set "$F2B_NAME" unbanip "$ip" >/dev/null || die "fail2ban не ответил: sudo systemctl status fail2ban"
+    log "IP $ip разбанен"
+  fi
+}
+
 wait_ready() {
-  local i
-  for i in $(seq 1 30); do
+  local _
+  for _ in $(seq 1 30); do
     curl -fsS --max-time 2 "$MTX_API/v3/paths/list" >/dev/null 2>&1 && return 0
     sleep 0.5
   done
@@ -608,6 +743,7 @@ cmd_install() {
   wait_ready
 
   setup_firewall
+  setup_fail2ban
   obtain_cert
   install_self
   write_heal_timer
@@ -673,6 +809,7 @@ cmd_status() {
     fi
   done
   cert_status
+  fail2ban_status
 
   local a b
   a=$(curl -fsS --max-time 3 "$MTX_API/v3/paths/list") || die "API MediaMTX недоступно"
@@ -806,7 +943,7 @@ write_heal_timer() {
     warn "Команда $SELF_BIN не установлена — автосброс задержки HLS не включён"
     return 0
   fi
-  cat > /etc/systemd/system/vrc-stream-heal.service <<EOF
+  cat > "$SYSTEMD_DIR/vrc-stream-heal.service" <<EOF
 [Unit]
 Description=vrc-stream: сброс задержки HLS, когда нет эфира и зрителей
 After=mediamtx.service nginx.service
@@ -815,7 +952,7 @@ After=mediamtx.service nginx.service
 Type=oneshot
 ExecStart=$SELF_BIN heal
 EOF
-  cat > /etc/systemd/system/vrc-stream-heal.timer <<'EOF'
+  cat > "$SYSTEMD_DIR/vrc-stream-heal.timer" <<'EOF'
 [Unit]
 Description=vrc-stream: проверка задержки HLS раз в минуту
 
@@ -831,14 +968,71 @@ EOF
   systemctl enable --now vrc-stream-heal.timer >/dev/null 2>&1
 }
 
+# ---------------------------------------------------------------- обновление
+
+# true, если версия $1 новее $2 (1.1.0 > 1.0.3)
+version_gt() {
+  [[ $1 != "$2" && $(printf '%s\n' "$1" "$2" | sort -V | tail -n 1) == "$1" ]]
+}
+
+# update            — обновиться до последнего релиза
+# update --check    — только сообщить, есть ли новая версия
+# update v1.0.3     — установить конкретную версию (в том числе откатиться)
+cmd_update() {
+  local arg=${1:-} check=0 tag new gh="https://github.com/$VRC_STREAM_REPO"
+  if [[ $arg == --check ]]; then check=1; arg=""; fi
+
+  if [[ -n $arg ]]; then
+    tag="v${arg#v}"
+  else
+    tag=$(curl -fsSL --max-time 15 "https://api.github.com/repos/$VRC_STREAM_REPO/releases/latest" \
+            | jq -r '.tag_name // empty') || true
+    [[ -n $tag ]] || die "Не удалось узнать последнюю версию — нет доступа к GitHub? $gh/releases"
+  fi
+  [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Некорректная версия: $tag (пример: v1.1.0)"
+  new=${tag#v}
+
+  if [[ -z $arg ]]; then
+    if [[ $new == "$VRC_STREAM_VERSION" ]]; then
+      log "Установлена последняя версия: $VRC_STREAM_VERSION"
+      return 0
+    fi
+    if ! version_gt "$new" "$VRC_STREAM_VERSION"; then
+      log "Установленная версия $VRC_STREAM_VERSION новее последнего релиза ($new) — обновлять нечего"
+      return 0
+    fi
+    log "Доступна версия $new (установлена $VRC_STREAM_VERSION). Что нового: $gh/releases/tag/$tag"
+    if (( check )); then
+      echo "    Обновить: sudo vrc-stream update"
+      return 0
+    fi
+  fi
+
+  local tmp expected actual
+  tmp=$(mktemp -d)
+  log "Скачиваю vrc-stream $new"
+  curl -fsSL --retry 3 -o "$tmp/setup.sh" "$gh/releases/download/$tag/setup.sh" \
+    || die "Не удалось скачать $gh/releases/download/$tag/setup.sh — такой версии нет?"
+  curl -fsSL --retry 3 -o "$tmp/SHA256SUMS.txt" "$gh/releases/download/$tag/SHA256SUMS.txt" \
+    || die "В релизе $tag нет SHA256SUMS.txt — не могу проверить файл"
+  expected=$(awk '$2 == "setup.sh" || $2 == "*setup.sh" { print $1 }' "$tmp/SHA256SUMS.txt")
+  actual=$(sha256sum "$tmp/setup.sh" | awk '{ print $1 }')
+  [[ -n $expected && $expected == "$actual" ]] || die "Контрольная сумма setup.sh не совпала — обновление отменено"
+  bash -n "$tmp/setup.sh" || die "Скачанный setup.sh повреждён — обновление отменено"
+
+  log "Файл проверен, устанавливаю $new (настройки и ключ OBS сохранятся)"
+  exec bash "$tmp/setup.sh" install
+}
+
 # ---------------------------------------------------------------- удаление
 
 cmd_uninstall() {
   log "Удаляю vrc-stream"
   if [[ -r $SETTINGS_FILE ]]; then load_settings; remove_firewall_rules; fi
+  remove_fail2ban
   systemctl disable --now vrc-stream-heal.timer mediamtx 2>/dev/null || true
-  rm -f /etc/systemd/system/vrc-stream-heal.service /etc/systemd/system/vrc-stream-heal.timer
-  rm -f /etc/systemd/system/mediamtx.service
+  rm -f "$SYSTEMD_DIR/vrc-stream-heal.service" "$SYSTEMD_DIR/vrc-stream-heal.timer"
+  rm -f "$SYSTEMD_DIR/mediamtx.service"
   systemctl daemon-reload
   rm -f "$MTX_BIN" /etc/nginx/sites-enabled/vrc-stream.conf "$NGINX_SITE" "$NGINX_SNIPPET"
   rm -rf "$(dirname "$MTX_CONF")" "$MTX_HOME" "$SETTINGS_DIR"
@@ -856,12 +1050,15 @@ main() {
     if [[ $(basename "$0") == vrc-stream ]]; then cmd=help; else cmd=install; fi
   fi
   case $cmd in
-    install|update) need_root; cmd_install ;;
+    install)        need_root; cmd_install ;;
+    update)
+      if [[ ${2:-} == --check ]]; then cmd_update --check; else need_root; cmd_update "${2:-}"; fi ;;
     info)           need_root; cmd_info ;;
     status)         cmd_status ;;
     logs)           exec journalctl -u mediamtx -n 100 -f ;;
     restart)        need_root; systemctl restart nginx mediamtx; wait_ready; cmd_status ;;
     new-key)        need_root; cmd_new_key ;;
+    unban)          need_root; cmd_unban "${2:-}" ;;
     uninstall)      need_root; cmd_uninstall ;;
     heal)           need_root; cmd_heal ;;
     version|--version) echo "vrc-stream $VRC_STREAM_VERSION (MediaMTX $MEDIAMTX_VERSION)" ;;
@@ -870,4 +1067,7 @@ main() {
   esac
 }
 
-main "$@"
+# VRC_STREAM_TEST=1 — только загрузить функции (для tests/), ничего не запуская
+if [[ -z ${VRC_STREAM_TEST:-} ]]; then
+  main "$@"
+fi

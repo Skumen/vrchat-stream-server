@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Подставной ss: слушающие порты из tests/fixtures/ss-listening.txt
+case "$*" in
+  *p*) echo "LISTEN 0 128 0.0.0.0:${MOCK_SSHD_PORT:-22} 0.0.0.0:* users:((\"sshd\",pid=1,fd=3))" ;;
+  *)   cat "$MOCK_DIR/../fixtures/ss-listening.txt" ;;
+esac
