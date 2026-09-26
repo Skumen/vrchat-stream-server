@@ -25,7 +25,7 @@
 #   MEDIAMTX_VERSION  версия MediaMTX (по умолчанию v1.21.1)
 set -euo pipefail
 
-VRC_STREAM_VERSION=1.0.1
+VRC_STREAM_VERSION=1.0.2
 MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-v1.21.1}"
 SETTINGS_DIR=/etc/vrc-stream
 SETTINGS_FILE=$SETTINGS_DIR/settings.env
@@ -505,6 +505,7 @@ cmd_install() {
   obtain_cert
   open_firewall
   install_self
+  write_heal_timer
 
   curl -fsS --max-time 3 http://127.0.0.1/health >/dev/null || warn "nginx не отвечает на /health"
   cmd_info
@@ -588,7 +589,7 @@ cmd_status() {
     | "",
       "Поток: \($p.name)   \(if $live then "● В ЭФИРЕ" else "○ OBS не подключён (идёт заставка)" end)",
       "  Дорожки:   \([$p.tracks2[]? | track] | join(", "))",
-      "  Битрейт:   \((($p.inboundBytes - $prev) * 8 / 2 / 1000) | floor) Кбит/с (входящий от OBS)",
+      (if $live then "  Битрейт:   \((($p.inboundBytes - $prev) * 8 / 2 / 1000) | floor) Кбит/с (входящий от OBS)" else empty end),
       "  RTSP/RTMP: \($r | length)" +
         (if ($r | length) > 0 then "  (" + ($r | group_by(.) | map("\(.[0]): \(length)") | join(", ")) + ")" else "" end)
   '
@@ -601,44 +602,117 @@ cmd_status() {
   hls_latency_check "$live"
 }
 
-# Длина HLS-сегментов и ожидаемая задержка. TARGETDURATION в MediaMTX только растёт
-# (до перезапуска), а плееры держат отставание ~3 × TARGETDURATION.
-hls_latency_check() {
-  local live=$1 base=${HLS_CHECK_BASE:-http://127.0.0.1} idx media pl td maxinf want
-  idx=$(curl -fsS --max-time 3 "$base/$STREAM_PATH/index.m3u8" 2>/dev/null) || return 0
+# TARGETDURATION и самый длинный сегмент в текущем HLS-плейлисте: "5 1.0".
+# В MediaMTX TARGETDURATION только растёт (до перезапуска), а плееры держат
+# отставание ~3 × TARGETDURATION — один длинный сегмент надолго увеличивает задержку.
+hls_playlist_info() {
+  local base=${HLS_CHECK_BASE:-http://127.0.0.1} idx media pl td maxinf
+  idx=$(curl -fsS --max-time 3 "$base/$STREAM_PATH/index.m3u8" 2>/dev/null) || return 1
   media=$(grep -v '^#' <<<"$idx" | grep -m1 . || true)
-  [[ -n $media ]] || return 0
-  pl=$(curl -fsS --max-time 3 "$base/$STREAM_PATH/$media" 2>/dev/null) || return 0
+  [[ -n $media ]] || return 1
+  pl=$(curl -fsS --max-time 3 "$base/$STREAM_PATH/$media" 2>/dev/null) || return 1
   td=$(sed -n 's/^#EXT-X-TARGETDURATION:\([0-9]*\).*/\1/p' <<<"$pl")
+  [[ -n $td ]] || return 1
   maxinf=$(awk -F'[:,]' '/^#EXTINF/ { if ($2 + 0 > m) m = $2 + 0 } END { printf "%.1f", m }' <<<"$pl")
-  [[ -n $td ]] || return 0
+  echo "$td $maxinf"
+}
 
+# HLS_SEGMENT в целых секундах, с округлением вверх: 1s -> 1, 1500ms -> 2
+segment_seconds() {
+  local s=${HLS_SEGMENT:-1s}
+  if [[ $s == *ms ]]; then
+    echo $(( (${s%ms} + 999) / 1000 ))
+  else
+    awk -v s="${s%s}" 'BEGIN { printf "%d", (s == int(s)) ? s : int(s) + 1 }'
+  fi
+}
+
+hls_latency_check() {
+  local live=$1 td maxinf want
+  read -r td maxinf < <(hls_playlist_info) || return 0
   if [[ -r $SETTINGS_FILE ]]; then load_settings; fi
-  want=${HLS_SEGMENT:-1s}
-  if [[ $want == *ms ]]; then want=$(( (${want%ms} + 999) / 1000 )); else want=$(awk -v s="${want%s}" 'BEGIN { printf "%d", (s == int(s)) ? s : int(s) + 1 }'); fi
+  want=$(segment_seconds)
 
   echo "HLS: сегменты сейчас до ${maxinf} с, TARGETDURATION ${td} с → задержка у зрителей ≈ $(( td * 3 )) с"
   if [[ $live == true ]] && awk -v m="$maxinf" -v w="$want" 'BEGIN { exit !(m > w + 0.5) }'; then
     warn "Сегменты длиннее ${want} с: в OBS интервал ключевых кадров должен быть ${want} s (не 0/авто)"
   elif (( td > want )); then
-    warn "TARGETDURATION вырос до ${td} с (был длинный сегмент при обрыве/переподключении OBS) и держится до перезапуска."
-    warn "Сбросить задержку: sudo vrc-stream restart — лучше до начала эфира, зрителям придётся перезапустить видео."
+    warn "TARGETDURATION вырос до ${td} с (был длинный сегмент при обрыве/переподключении OBS)."
+    warn "Сбросится сам, когда OBS не в эфире и никто не смотрит (проверка раз в минуту)."
+    warn "Сбросить сразу: sudo vrc-stream restart — зрителям придётся перезапустить видео."
   fi
 }
 
+# Уникальные IP, скачивавшие HLS-сегменты за последние $1 секунд (по умолчанию 20)
 hls_viewers() {
-  local log=/var/log/nginx/vrc-stream.access.log
+  local log=/var/log/nginx/vrc-stream.access.log window=${1:-20}
   [[ -r $log ]] || { echo "? (нужен sudo)"; return 0; }
   tail -n 50000 "$log" \
-    | awk -v t="$(( $(date +%s) - 20 ))" '$1 >= t && $3 ~ /^2/ && $4 ~ /\.(ts|mp4|m4s)(\?|$)/ { print $2 }' \
+    | awk -v t="$(( $(date +%s) - window ))" '$1 >= t && $3 ~ /^2/ && $4 ~ /\.(ts|mp4|m4s)(\?|$)/ { print $2 }' \
     | sort -u | wc -l
+}
+
+# Запускается таймером vrc-stream-heal.timer раз в минуту: если TARGETDURATION вырос,
+# а OBS не в эфире и никто не смотрит — перезапускает MediaMTX, возвращая низкую задержку.
+cmd_heal() {
+  local json live readers td maxinf want stamp=${HEAL_STAMP:-/run/vrc-stream-heal.stamp}
+  load_settings
+  json=$(curl -fsS --max-time 3 "$MTX_API/v3/paths/list" 2>/dev/null) || return 0
+
+  live=$(jq -r --arg n "$STREAM_PATH" \
+    '[.items[] | select(.name == $n) | (if has("online") then .online else .ready end)][0] // false' <<<"$json")
+  [[ $live == false ]] || return 0
+  readers=$(jq '[.items[].readers[]? | select(.type != "hidden" and .type != "hlsSession")] | length' <<<"$json")
+  [[ $readers == 0 ]] || return 0
+  [[ $(hls_viewers 120) == 0 ]] || return 0
+
+  read -r td maxinf < <(hls_playlist_info) || return 0
+  want=$(segment_seconds)
+  (( td > want )) || return 0
+
+  # Не чаще раза в 10 минут — на случай, если что-то пойдёт не так
+  if [[ -f $stamp ]] && (( $(date +%s) - $(stat -c %Y "$stamp") < 600 )); then return 0; fi
+  touch "$stamp"
+  echo "TARGETDURATION ${td} с > ${want} с, эфира и зрителей нет — перезапускаю MediaMTX для сброса задержки HLS"
+  systemctl restart mediamtx
+}
+
+write_heal_timer() {
+  if [[ ! -x $SELF_BIN ]]; then
+    warn "Команда $SELF_BIN не установлена — автосброс задержки HLS не включён"
+    return 0
+  fi
+  cat > /etc/systemd/system/vrc-stream-heal.service <<EOF
+[Unit]
+Description=vrc-stream: сброс задержки HLS, когда нет эфира и зрителей
+After=mediamtx.service nginx.service
+
+[Service]
+Type=oneshot
+ExecStart=$SELF_BIN heal
+EOF
+  cat > /etc/systemd/system/vrc-stream-heal.timer <<'EOF'
+[Unit]
+Description=vrc-stream: проверка задержки HLS раз в минуту
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now vrc-stream-heal.timer >/dev/null 2>&1
 }
 
 # ---------------------------------------------------------------- удаление
 
 cmd_uninstall() {
   log "Удаляю vrc-stream"
-  systemctl disable --now mediamtx 2>/dev/null || true
+  systemctl disable --now vrc-stream-heal.timer mediamtx 2>/dev/null || true
+  rm -f /etc/systemd/system/vrc-stream-heal.service /etc/systemd/system/vrc-stream-heal.timer
   rm -f /etc/systemd/system/mediamtx.service
   systemctl daemon-reload
   rm -f "$MTX_BIN" /etc/nginx/sites-enabled/vrc-stream.conf "$NGINX_SITE" "$NGINX_SNIPPET"
@@ -664,6 +738,7 @@ main() {
     restart)        need_root; systemctl restart nginx mediamtx; wait_ready; cmd_status ;;
     new-key)        need_root; cmd_new_key ;;
     uninstall)      need_root; cmd_uninstall ;;
+    heal)           need_root; cmd_heal ;;
     version|--version) echo "vrc-stream $VRC_STREAM_VERSION (MediaMTX $MEDIAMTX_VERSION)" ;;
     help|-h|--help) usage ;;
     *)              usage; exit 1 ;;
