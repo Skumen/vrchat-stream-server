@@ -25,6 +25,7 @@
 #   MEDIAMTX_VERSION  версия MediaMTX (по умолчанию v1.21.1)
 set -euo pipefail
 
+VRC_STREAM_VERSION=1.0.0
 MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-v1.21.1}"
 SETTINGS_DIR=/etc/vrc-stream
 SETTINGS_FILE=$SETTINGS_DIR/settings.env
@@ -48,8 +49,8 @@ die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 need_root() { [[ $EUID -eq 0 ]] || die "Нужны права root: sudo $0 $*"; }
 
 usage() {
+  echo "vrc-stream $VRC_STREAM_VERSION — стрим-сервер для VRChat"
   cat <<'EOF'
-vrc-stream — стрим-сервер для VRChat
 
   sudo vrc-stream info       ссылки для OBS и VRChat
   sudo vrc-stream status     идёт ли эфир, битрейт, число зрителей
@@ -58,6 +59,7 @@ vrc-stream — стрим-сервер для VRChat
   sudo vrc-stream new-key    сгенерировать новый ключ для OBS
   sudo vrc-stream install    переустановить / применить настройки
   sudo vrc-stream uninstall  удалить сервер
+  vrc-stream version         версия
 
 Настройки меняются так:  sudo HLS_SEGMENT=2s vrc-stream install
 EOF
@@ -632,6 +634,7 @@ main() {
     restart)        need_root; systemctl restart nginx mediamtx; wait_ready; cmd_status ;;
     new-key)        need_root; cmd_new_key ;;
     uninstall)      need_root; cmd_uninstall ;;
+    version|--version) echo "vrc-stream $VRC_STREAM_VERSION (MediaMTX $MEDIAMTX_VERSION)" ;;
     help|-h|--help) usage ;;
     *)              usage; exit 1 ;;
   esac

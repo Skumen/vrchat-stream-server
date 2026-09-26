@@ -18,7 +18,7 @@
 | `VRChat-Intel` | Встроенная графика или видеокарта Intel Arc |
 | `VRChat-CPU` | Если видеокарта не подходит: кодирует процессор (x264) |
 
-1. Скачайте репозиторий: на [странице GitHub](https://github.com/Skumen/vrchat-stream-server) нажмите **Code → Download ZIP** и распакуйте архив.
+1. Скачайте [`obs-profiles.zip`](https://github.com/Skumen/vrchat-stream-server/releases/latest/download/obs-profiles.zip) из последнего релиза и распакуйте архив.
 2. В OBS: **Профиль → Импорт (Profile → Import)**, выберите папку под вашу видеокарту, например `obs-profiles\VRChat-NVIDIA`.
 3. **Профиль (Profile)** → выберите `VRChat Stream (NVIDIA)` (или ваш вариант).
 4. **⚠ Настройки → Трансляция:** замените `rtmp://YOUR-SERVER/live` и `YOUR-KEY` на свои данные из команды `sudo vrc-stream info` на сервере.

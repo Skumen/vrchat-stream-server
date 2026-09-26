@@ -17,9 +17,11 @@ OBS ──RTMP:1935──▶ MediaMTX ┼─ RTMP  rtmp://…/live/stream       
 На VM с Ubuntu 20.04+ или Debian 11+ (x86_64 или ARM) выполните:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Skumen/vrchat-stream-server/main/setup.sh -o setup.sh
+curl -fsSL https://github.com/Skumen/vrchat-stream-server/releases/latest/download/setup.sh -o setup.sh
 sudo DOMAIN=stream.example.com bash setup.sh
 ```
+
+Команда скачивает скрипт из [последнего релиза](https://github.com/Skumen/vrchat-stream-server/releases/latest). Там же лежит архив `obs-profiles.zip` с готовыми профилями для OBS.
 
 Замените `stream.example.com` на свой домен. Если домена нет, запустите просто `sudo bash setup.sh`: сервер будет работать по HTTP.
 
