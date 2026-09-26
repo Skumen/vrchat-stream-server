@@ -13,7 +13,8 @@ make_cert ok.example.com 60
 make_cert old.example.com 10
 cert() { (set -euo pipefail; load_settings; DOMAIN=$1; cert_status) 2>&1 | strip_colors; }
 out=$(cert ok.example.com)
-expect_has   "показывает срок"                 "$out" "действует ещё 59 дн."
+check        "показывает срок (59–60 дн., зависит от долей секунды)" \
+             bash -c '[[ $1 =~ действует\ ещё\ (59|60)\ дн\. ]]' _ "$out"
 expect_hasnt "60 дней — без предупреждения"    "$out" "не продлился"
 out=$(cert old.example.com)
 expect_has   "10 дней — предупреждение"        "$out" "не продлился вовремя"
