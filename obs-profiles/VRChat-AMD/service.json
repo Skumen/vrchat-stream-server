@@ -1,0 +1,9 @@
+{
+    "type": "rtmp_custom",
+    "settings": {
+        "server": "rtmp://YOUR-SERVER/live",
+        "key": "stream?user=obs&pass=YOUR-KEY",
+        "use_auth": false,
+        "bwtest": false
+    }
+}

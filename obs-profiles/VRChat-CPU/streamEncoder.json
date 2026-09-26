@@ -1,0 +1,8 @@
+{
+    "rate_control": "CBR",
+    "bitrate": 4500,
+    "keyint_sec": 1,
+    "preset": "veryfast",
+    "profile": "high",
+    "tune": "zerolatency"
+}

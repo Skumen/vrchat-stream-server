@@ -1,0 +1,8 @@
+{
+    "rate_control": "CBR",
+    "bitrate": 4500,
+    "keyint_sec": 1,
+    "preset": "quality",
+    "profile": "high",
+    "bf": 0
+}

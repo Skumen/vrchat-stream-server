@@ -52,6 +52,7 @@ sudo DOMAIN=stream.example.com bash setup.sh
 ## Настройка OBS
 
 > Полная инструкция с профилями качества, настройками для NVIDIA/AMD/Intel/x264 и решением проблем — в [OBS-settings.md](OBS-settings.md).
+> Готовые профили для импорта в OBS (**Профиль → Импорт**) лежат в папке [`obs-profiles`](obs-profiles).
 
 **Настройки → Трансляция**
 - Сервис: *Настраиваемый…*
