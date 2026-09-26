@@ -29,7 +29,7 @@
 #   APT_WAIT_MAX    сколько секунд ждать, пока система ставит обновления (по умолчанию 900)
 set -euo pipefail
 
-VRC_STREAM_VERSION=1.1.2
+VRC_STREAM_VERSION=1.1.3
 VRC_STREAM_REPO="${VRC_STREAM_REPO:-Skumen/vrchat-stream-server}"
 MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-v1.21.1}"
 SETTINGS_DIR=/etc/vrc-stream
@@ -578,9 +578,10 @@ setup_firewall() {
 
   ssh=$(ssh_ports | tr '\n' ' '); ssh=${ssh% }
   for p in $ssh; do rules+=("$p/tcp:SSH"); done
-  # 80 открыт всегда: по нему Let's Encrypt проверяет домен при каждом продлении сертификата
-  rules+=("80/tcp:vrc-stream HTTP, Let's Encrypt" "443/tcp:vrc-stream HTTPS"
-          "$RTMP_PORT/tcp:vrc-stream RTMP (OBS)" "$RTSP_PORT/tcp:vrc-stream RTSP")
+  # 80 открыт всегда: по нему Let's Encrypt проверяет домен при каждом продлении сертификата.
+  # Комментарии ufw — только буквы, цифры, пробелы и дефис: апостроф ufw отвергает ("Invalid syntax")
+  rules+=("80/tcp:vrc-stream HTTP and LetsEncrypt" "443/tcp:vrc-stream HTTPS"
+          "$RTMP_PORT/tcp:vrc-stream RTMP from OBS" "$RTSP_PORT/tcp:vrc-stream RTSP")
   for p in $FIREWALL_EXTRA; do rules+=("$p:vrc-stream extra"); done
 
   for p in "${rules[@]}"; do

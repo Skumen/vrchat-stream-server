@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# Подставной ufw: пишет вызовы в журнал; «включён», если есть $MOCK_STATE/ufw_active
+# Подставной ufw: пишет вызовы в журнал; «включён», если есть $MOCK_STATE/ufw_active.
+# Как настоящий ufw, отвергает комментарий с кавычками (регрессия 1.1.2: "Let's Encrypt").
 echo "ufw $*" >> "$MOCK_LOG"
+args=("$@")
+for i in "${!args[@]}"; do
+  if [[ ${args[i]} == comment && ${args[i+1]:-} == *[\'\"]* ]]; then
+    echo "ERROR: Invalid syntax" >&2
+    exit 1
+  fi
+done
 case ${1:-} in
   status) if [[ -f $MOCK_STATE/ufw_active ]]; then echo "Status: active"; else echo "Status: inactive"; fi ;;
   --force) [[ ${2:-} == enable ]] && touch "$MOCK_STATE/ufw_active" ;;

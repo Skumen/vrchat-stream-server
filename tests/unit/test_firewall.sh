@@ -11,7 +11,9 @@ line_of() { calls | grep -n -- "$1" | head -n 1 | cut -d: -f1; }
 
 section "ufw не установлен"
 unmock ufw; rm -f "$MOCK_STATE/ufw_active"; reset_calls
-out=$(fw)
+out=$(fw); rc=$?
+expect_eq  "проходит без ошибок (код 0)"       "$rc" "0"
+expect_hasnt "комментарии ufw без кавычек"     "$(calls)" "'"
 expect_has "ставится через apt"                 "$(calls)" "install -y -q ufw"
 expect_has "порт SSH из sshd и подключения"      "$(calls)" "allow 2222/tcp comment SSH"
 expect_has "22 разрешается всегда"               "$(calls)" "allow 22/tcp comment SSH"
