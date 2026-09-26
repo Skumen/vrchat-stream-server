@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
-# Подставной sshd: `sshd -T` сообщает порт из $MOCK_SSHD_PORT (по умолчанию 22)
+# Подставной sshd: `sshd -T` сообщает порт из $MOCK_SSHD_PORT (по умолчанию 22);
+# падает, если есть $MOCK_STATE/sshd_fail (как при отсутствии /run/sshd)
+[[ -f $MOCK_STATE/sshd_fail ]] && exit 255
 [[ ${1:-} == -T ]] && echo "port ${MOCK_SSHD_PORT:-22}"
 exit 0

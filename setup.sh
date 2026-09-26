@@ -29,7 +29,7 @@
 #   APT_WAIT_MAX    сколько секунд ждать, пока система ставит обновления (по умолчанию 900)
 set -euo pipefail
 
-VRC_STREAM_VERSION=1.1.1
+VRC_STREAM_VERSION=1.1.2
 VRC_STREAM_REPO="${VRC_STREAM_REPO:-Skumen/vrchat-stream-server}"
 MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-v1.21.1}"
 SETTINGS_DIR=/etc/vrc-stream
@@ -59,6 +59,14 @@ warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 
 need_root() { [[ $EUID -eq 0 ]] || die "Нужны права root: запустите через sudo"; }
+
+# Неожиданная ошибка (сработал set -e) — сообщить, на какой команде, а не выйти молча.
+# Внутри $(…) не печатаем: там ошибки обрабатывает вызывающий код.
+on_error() {
+  (( BASH_SUBSHELL == 0 )) || return 0
+  printf '\033[1;31m[x]\033[0m Неожиданная ошибка (код %s) в строке %s: %s\n' "$1" "$2" "$3" >&2
+  printf '    Сообщите об этом с этим выводом: https://github.com/%s/issues\n' "$VRC_STREAM_REPO" >&2
+}
 
 # Установлена ли программа (отдельная функция — в тестах её подменяют)
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
@@ -190,7 +198,8 @@ apt_busy() {
 
 # Последнее действие dpkg ("16:40:01 unpack linux-firmware") — видно, что установка идёт
 dpkg_last_action() {
-  tail -n 1 "$DPKG_LOG" 2>/dev/null | awk '{ print $2, $3, $4 }' | cut -c1-70
+  [[ -r $DPKG_LOG ]] || return 0
+  tail -n 1 "$DPKG_LOG" | awk '{ print $2, $3, $4 }' | cut -c1-70
 }
 
 # Проверяем каждые 5 с и продолжаем, как только apt освободится; раз в 30 с пишем, что ждём
@@ -532,7 +541,8 @@ ssh_ports() {
     grep -hiE '^[[:space:]]*Port[[:space:]]+[0-9]+' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null \
       | awk '{ print $2 }'
     ss -Htlnp 2>/dev/null | awk '/"sshd"/ { n = split($4, a, ":"); print a[n] }'
-    [[ -n ${SSH_CONNECTION:-} ]] && awk '{ print $4 }' <<<"$SSH_CONNECTION"
+    # Через if, а не &&: sudo убирает SSH_CONNECTION, и «ложь» стала бы результатом функции
+    if [[ -n ${SSH_CONNECTION:-} ]]; then awk '{ print $4 }' <<<"$SSH_CONNECTION"; fi
   } | grep -E '^[0-9]+$' | sort -un
 }
 
@@ -1061,6 +1071,8 @@ cmd_uninstall() {
 # ---------------------------------------------------------------- main
 
 main() {
+  set -E
+  trap 'on_error $? $LINENO "$BASH_COMMAND"' ERR
   local cmd=${1:-}
   if [[ -z $cmd ]]; then
     if [[ $(basename "$0") == vrc-stream ]]; then cmd=help; else cmd=install; fi

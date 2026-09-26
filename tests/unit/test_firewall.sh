@@ -26,6 +26,17 @@ expect_hasnt "localhost-порты не в списке"       "$out" "8888"
 expect_hasnt "DHCP-клиент (68/udp) не в списке"  "$out" "68/udp"
 expect_has "подсказка FIREWALL_EXTRA"            "$out" 'FIREWALL_EXTRA="25565/tcp 7777/udp"'
 
+section "Как под sudo: нет SSH_CONNECTION, sshd -T не отвечает (регрессия 1.1.1)"
+# sudo убирает SSH_CONNECTION; раньше из-за этого ssh_ports возвращала «ложь» и set -e молча
+# обрывал установку сразу после запуска MediaMTX
+unmock ufw; rm -f "$MOCK_STATE/ufw_active"; touch "$MOCK_STATE/sshd_fail"; reset_calls
+out=$(unset SSH_CONNECTION; fw); rc=$?
+rm -f "$MOCK_STATE/sshd_fail"
+expect_eq  "установка не обрывается (код 0)"  "$rc" "0"
+expect_has "22 разрешён всё равно"            "$(calls)" "allow 22/tcp comment SSH"
+expect_has "порт из ss (слушает sshd)"        "$(calls)" "allow 2222/tcp comment SSH"
+expect_has "ufw включён"                      "$(calls)" "--force enable"
+
 section "ufw установлен и уже включён"
 touch "$MOCK_STATE/ufw_active"; reset_calls
 out=$(fw)

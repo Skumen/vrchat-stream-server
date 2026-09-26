@@ -28,6 +28,12 @@ expect_has "сообщение на 0:30" "$out" "всё ещё жду: 0:30"
 expect_has "сообщение на 1:00" "$out" "всё ещё жду: 1:00"
 expect_eq  "не чаще раза в 30 с" "$(grep -c 'всё ещё жду' <<<"$out")" "2"
 
+section "apt занят, лога dpkg нет"
+echo 7 > "$MOCK_STATE/apt_busy"; reset_calls
+out=$(DPKG_LOG=$T_TMP/no-such-dpkg.log apt_run install -y -q ufw); rc=$?
+expect_eq  "не обрывается без лога dpkg" "$rc" "0"
+expect_has "…и доходит до apt-get"       "$(calls)" "install -y -q ufw"
+
 section "apt занят дольше лимита"
 echo 999 > "$MOCK_STATE/apt_busy"; reset_calls
 out=$(APT_WAIT_MAX=60 apt_run update -q); rc=$?
