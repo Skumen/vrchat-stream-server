@@ -53,6 +53,15 @@ if [[ $(uname -o 2>/dev/null) == Msys ]]; then
   chmod() { command chmod "$@" 2>/dev/null || true; }
 fi
 
+# ufw, fail2ban и nft «установлены» только если подставлены через mock(). Без этого тесты
+# увидели бы настоящие программы системы (на раннере GitHub есть и ufw, и fail2ban).
+has_cmd() {
+  case $1 in
+    ufw|fail2ban-client|nft) [[ -x $MOCK_BIN/$1 ]] ;;
+    *) command -v "$1" >/dev/null 2>&1 ;;
+  esac
+}
+
 # Функцию setup.sh — в подоболочке с теми же строгими правилами (set -e), что и в бою
 run() { ( set -euo pipefail; "$@" ); }
 strip_colors() { sed 's/\x1b\[[0-9;]*m//g'; }
@@ -62,6 +71,12 @@ ok()  { T_PASS=$((T_PASS + 1)); printf '  \033[32m✓\033[0m %s\n' "$1"; }
 bad() {
   T_FAIL=$((T_FAIL + 1)); printf '  \033[31m✗ %s\033[0m\n' "$1"
   if [[ -n ${2:-} ]]; then printf '%s\n' "$2" | sed 's/^/      │ /'; fi
+  # В GitHub Actions — ещё и аннотация: её видно на странице запуска без чтения лога
+  if [[ -n ${GITHUB_ACTIONS:-} ]]; then
+    local d=${2:-}
+    d=${d//'%'/'%25'}; d=${d//$'\n'/'%0A'}
+    printf '::error title=%s::%s%%0A%s\n' "$(basename "$0" .sh)" "$1" "${d:0:1500}"
+  fi
 }
 section() { printf '\n%s\n' "$*"; }
 

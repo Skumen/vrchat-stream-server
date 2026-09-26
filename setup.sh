@@ -60,6 +60,9 @@ die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 
 need_root() { [[ $EUID -eq 0 ]] || die "Нужны права root: запустите через sudo"; }
 
+# Установлена ли программа (отдельная функция — в тестах её подменяют)
+has_cmd() { command -v "$1" >/dev/null 2>&1; }
+
 usage() {
   echo "vrc-stream $VRC_STREAM_VERSION — стрим-сервер для VRChat"
   cat <<'EOF'
@@ -538,7 +541,7 @@ setup_firewall() {
     return 0
   fi
 
-  if ! command -v ufw >/dev/null; then
+  if ! has_cmd ufw; then
     log "Устанавливаю ufw"
     # Сбой фаервола не должен прерывать установку: дальше ещё выпуск HTTPS-сертификата
     if ! apt_get install -y -q ufw; then
@@ -582,7 +585,7 @@ setup_firewall() {
 # 80 и 443 не закрываем никогда: 80 нужен Let's Encrypt для продления сертификата,
 # 443 — HTTPS; SSH тоже остаётся открытым
 remove_firewall_rules() {
-  command -v ufw >/dev/null || return 0
+  has_cmd ufw || return 0
   local p
   for p in "$RTMP_PORT/tcp" "$RTSP_PORT/tcp" $FIREWALL_EXTRA; do
     ufw delete allow "$p" >/dev/null 2>&1 || true
@@ -601,7 +604,7 @@ setup_fail2ban() {
     return 0
   fi
 
-  if ! command -v fail2ban-client >/dev/null; then
+  if ! has_cmd fail2ban-client; then
     log "Устанавливаю fail2ban"
     if ! apt_get install -y -q fail2ban python3-systemd; then
       warn "Не удалось установить fail2ban — пропускаю. Повторите позже: sudo vrc-stream install"
@@ -611,9 +614,9 @@ setup_fail2ban() {
 
   # Бан через тот же фаервол, что стоит в системе
   local banaction=iptables-multiport
-  if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+  if has_cmd ufw && ufw status 2>/dev/null | grep -q "Status: active"; then
     banaction=ufw
-  elif command -v nft >/dev/null; then
+  elif has_cmd nft; then
     banaction=nftables-multiport
   fi
 
@@ -670,11 +673,11 @@ EOF
 remove_fail2ban() {
   [[ -f $F2B_JAIL || -f $F2B_FILTER ]] || return 0
   rm -f "$F2B_JAIL" "$F2B_FILTER"
-  if command -v fail2ban-client >/dev/null; then systemctl restart fail2ban 2>/dev/null || true; fi
+  if has_cmd fail2ban-client; then systemctl restart fail2ban 2>/dev/null || true; fi
 }
 
 fail2ban_status() {
-  command -v fail2ban-client >/dev/null || return 0
+  has_cmd fail2ban-client || return 0
   local out n list
   out=$(fail2ban-client status "$F2B_NAME" 2>/dev/null) || return 0
   n=$(awk -F: '/Currently banned/ { gsub(/[ \t]/, "", $2); print $2 }' <<<"$out")
@@ -689,7 +692,7 @@ fail2ban_status() {
 cmd_unban() {
   local ip=${1:-}
   [[ -n $ip ]] || die "Укажите IP: sudo vrc-stream unban 203.0.113.7  (или all)"
-  command -v fail2ban-client >/dev/null || die "fail2ban не установлен"
+  has_cmd fail2ban-client || die "fail2ban не установлен"
   if [[ $ip == all ]]; then
     fail2ban-client unban --all >/dev/null || die "fail2ban не ответил: sudo systemctl status fail2ban"
     log "Разбанены все IP"
