@@ -178,6 +178,7 @@ vrc-stream version              # версия
 **Автоматически, на каждый push** ([GitHub Actions](https://github.com/Skumen/vrchat-stream-server/actions)):
 - ShellCheck всех скриптов.
 - Unit-тесты: настройки, фаервол, fail2ban, ожидание apt, автосброс задержки, `update`, срок сертификата, генерация конфигов, профили OBS. Системные команды (`ufw`, `apt-get`, `systemctl`…) подменены.
+- Тест полной установки: `setup.sh install` целиком, как под `sudo` на свежей VM, во временной папке вместо `/`. Сценарии: свежая VM, повторный запуск, переход со старой установки на nginx-rtmp, без домена и фаервола, ошибки DNS, Let's Encrypt и nginx, удаление.
 - Интеграционные тесты с настоящим MediaMTX: ключ OBS, HLS, RTSP, заставка, `status`. Фильтр fail2ban проверяется настоящим `fail2ban-regex`.
 
 Если что-то не работает, откройте [Issue](https://github.com/Skumen/vrchat-stream-server/issues) и приложите вывод `sudo vrc-stream status` и `sudo vrc-stream logs`.

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Подставной dpkg: `dpkg -s libnginx-mod-rtmp` «установлен», если есть $MOCK_STATE/rtmp_installed
+echo "dpkg $*" >> "$MOCK_LOG"
+[[ ${1:-} == -s && ${2:-} == libnginx-mod-rtmp && -f $MOCK_STATE/rtmp_installed ]] && exit 0
+exit 1

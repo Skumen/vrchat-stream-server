@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Подставной nginx: `nginx -t` успешен, если нет $MOCK_STATE/nginx_bad
+echo "nginx $*" >> "$MOCK_LOG"
+[[ -f $MOCK_STATE/nginx_bad ]] && { echo "nginx: [emerg] test failure" >&2; exit 1; }
+exit 0

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Подставной mountpoint: смонтировано, если есть $MOCK_STATE/hls_mounted
+echo "mountpoint $*" >> "$MOCK_LOG"
+[[ -f $MOCK_STATE/hls_mounted ]] && exit 0
+exit 1

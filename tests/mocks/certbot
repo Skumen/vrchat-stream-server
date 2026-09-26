@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Подставной certbot: «выпускает» сертификат в $MOCK_LE_LIVE/<cert-name>/, падает при $MOCK_STATE/certbot_fail
+echo "certbot $*" >> "$MOCK_LOG"
+[[ -f $MOCK_STATE/certbot_fail ]] && { echo "Challenge failed" >&2; exit 1; }
+name=""
+while (( $# )); do [[ $1 == --cert-name ]] && name=$2; shift; done
+mkdir -p "$MOCK_LE_LIVE/$name"
+echo "fake certificate" > "$MOCK_LE_LIVE/$name/fullchain.pem"
+echo "fake key" > "$MOCK_LE_LIVE/$name/privkey.pem"
+exit 0

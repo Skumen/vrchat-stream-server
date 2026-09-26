@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+echo "userdel $*" >> "$MOCK_LOG"
+rm -f "$MOCK_STATE/user_${*: -1}"
+exit 0

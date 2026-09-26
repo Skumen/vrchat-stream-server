@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Подставной curl для полной установки: внешний IP, API MediaMTX, /health nginx; остальное — «нет сети»
+echo "curl $*" >> "$MOCK_LOG"
+url=${*: -1}
+case $url in
+  *api.ipify.org*)   echo "${MOCK_PUBLIC_IP:-203.0.113.50}" ;;
+  */v3/paths/list)   echo '{"itemCount":0,"pageCount":0,"items":[]}' ;;
+  */health)          echo ok ;;
+  *) exit 22 ;;
+esac

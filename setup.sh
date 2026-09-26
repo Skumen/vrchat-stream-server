@@ -29,7 +29,7 @@
 #   APT_WAIT_MAX    сколько секунд ждать, пока система ставит обновления (по умолчанию 900)
 set -euo pipefail
 
-VRC_STREAM_VERSION=1.1.3
+VRC_STREAM_VERSION=1.1.4
 VRC_STREAM_REPO="${VRC_STREAM_REPO:-Skumen/vrchat-stream-server}"
 MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-v1.21.1}"
 SETTINGS_DIR=/etc/vrc-stream
@@ -44,8 +44,13 @@ HLS_INTERNAL=127.0.0.1:8888
 STREAM_PATH=live/stream
 PUBLISH_USER=obs
 SELF_BIN=/usr/local/bin/vrc-stream
-NGINX_SITE=/etc/nginx/sites-available/vrc-stream.conf
-NGINX_SNIPPET=/etc/nginx/snippets/vrc-stream.conf
+NGINX_DIR=/etc/nginx
+NGINX_SITE=$NGINX_DIR/sites-available/vrc-stream.conf
+NGINX_SNIPPET=$NGINX_DIR/snippets/vrc-stream.conf
+NGINX_ACCESS_LOG=/var/log/nginx/vrc-stream.access.log
+BACKUP_DIR=/root/vrc-stream-backups
+FSTAB=/etc/fstab
+LEGACY_HLS_DIR=/var/www/hls
 ACME_ROOT=/var/www/letsencrypt
 LE_LIVE=/etc/letsencrypt/live
 F2B_JAIL=/etc/fail2ban/jail.d/vrc-stream.conf
@@ -152,12 +157,12 @@ ensure_key() {
   if [[ ${NEW_KEY:-0} == 1 ]]; then
     STREAM_KEY=$(gen_key)
   elif [[ -z $STREAM_KEY ]]; then
-    if [[ -s /etc/nginx/stream_key ]]; then
-      STREAM_KEY=$(tr -cd 'A-Za-z0-9_-' < /etc/nginx/stream_key)   # ключ от старой версии на nginx-rtmp
+    if [[ -s $NGINX_DIR/stream_key ]]; then
+      STREAM_KEY=$(tr -cd 'A-Za-z0-9_-' < "$NGINX_DIR/stream_key")   # ключ от старой версии на nginx-rtmp
     fi
     [[ $STREAM_KEY =~ ^[A-Za-z0-9_-]{8,64}$ ]] || STREAM_KEY=$(gen_key)
   fi
-  rm -f /etc/nginx/stream_key
+  rm -f "$NGINX_DIR/stream_key"
   # Внутренний секрет между nginx и MediaMTX (см. hlsCDNSecret)
   [[ $HLS_CDN_SECRET =~ ^[a-f0-9]{24}$ ]] || HLS_CDN_SECRET=$(gen_key)
 }
@@ -238,16 +243,16 @@ install_packages() {
 
 backup_nginx() {
   local dir
-  dir="/root/vrc-stream-backups/nginx-$(date +%Y%m%d-%H%M%S)"
+  dir="$BACKUP_DIR/nginx-$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$(dirname "$dir")"
-  cp -a /etc/nginx "$dir"
+  cp -a "$NGINX_DIR" "$dir"
   NGINX_BACKUP=$dir
-  log "Бэкап /etc/nginx -> $dir"
+  log "Бэкап $NGINX_DIR -> $dir"
 }
 
 cleanup_legacy() {
   # Остатки ручной настройки и прошлой версии скрипта на nginx-rtmp
-  local conf=/etc/nginx/nginx.conf
+  local conf=$NGINX_DIR/nginx.conf
   if [[ -f $conf ]]; then
     sed -i '\|include /etc/nginx/rtmp.conf;|d; /^[[:space:]]*rtmp_auto_push[[:space:]]/d' "$conf"
     if grep -qE '^[[:space:]]*rtmp[[:space:]]*\{' "$conf"; then
@@ -259,20 +264,20 @@ cleanup_legacy() {
       log "Удалён старый блок rtmp{} из nginx.conf"
     fi
   fi
-  rm -f /etc/nginx/rtmp.conf \
-        /etc/nginx/sites-enabled/default \
-        /etc/nginx/sites-enabled/SK.conf \
-        /etc/nginx/sites-enabled/stream.conf /etc/nginx/sites-available/stream.conf
+  rm -f "$NGINX_DIR/rtmp.conf" \
+        "$NGINX_DIR/sites-enabled/default" \
+        "$NGINX_DIR/sites-enabled/SK.conf" \
+        "$NGINX_DIR/sites-enabled/stream.conf" "$NGINX_DIR/sites-available/stream.conf"
 
   if dpkg -s libnginx-mod-rtmp >/dev/null 2>&1; then
     log "Удаляю nginx-rtmp (порт $RTMP_PORT теперь у MediaMTX)"
     apt_get purge -y -q libnginx-mod-rtmp
   fi
 
-  if grep -qE '[[:space:]]/var/www/hls[[:space:]]' /etc/fstab; then
-    sed -i '\|[[:space:]]/var/www/hls[[:space:]]|d' /etc/fstab
+  if grep -qE "[[:space:]]${LEGACY_HLS_DIR}[[:space:]]" "$FSTAB"; then
+    sed -i "\\|[[:space:]]${LEGACY_HLS_DIR}[[:space:]]|d" "$FSTAB"
   fi
-  if mountpoint -q /var/www/hls; then umount /var/www/hls || true; fi
+  if mountpoint -q "$LEGACY_HLS_DIR"; then umount "$LEGACY_HLS_DIR" || true; fi
 }
 
 install_mediamtx() {
@@ -436,7 +441,7 @@ EOF
 }
 
 write_nginx() {
-  install -d "$ACME_ROOT" /etc/nginx/snippets
+  install -d "$ACME_ROOT" "$(dirname "$NGINX_SNIPPET")"
 
   cat > "$NGINX_SNIPPET" <<EOF
 # Сгенерировано vrc-stream
@@ -460,7 +465,7 @@ location / {
     proxy_set_header Authorization "Bearer $HLS_CDN_SECRET";
     proxy_buffering off;
     proxy_read_timeout 60s;
-    access_log /var/log/nginx/vrc-stream.access.log vrc_stream;
+    access_log $NGINX_ACCESS_LOG vrc_stream;
 }
 EOF
   chmod 0640 "$NGINX_SNIPPET"
@@ -493,16 +498,16 @@ server {
     $v6_443
     server_name $DOMAIN;
     server_tokens off;
-    ssl_certificate     /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+    ssl_certificate     $LE_LIVE/$DOMAIN/fullchain.pem;
+    ssl_certificate_key $LE_LIVE/$DOMAIN/privkey.pem;
     include $NGINX_SNIPPET;
 }
 EOF
     fi
   } > "$NGINX_SITE"
-  ln -sf "$NGINX_SITE" /etc/nginx/sites-enabled/vrc-stream.conf
+  ln -sf "$NGINX_SITE" "$NGINX_DIR/sites-enabled/vrc-stream.conf"
 
-  nginx -t 2>/dev/null || { nginx -t; die "Ошибка в конфиге nginx. Бэкап: ${NGINX_BACKUP:-нет}"; }
+  nginx -t 2>/dev/null || { nginx -t || true; die "Ошибка в конфиге nginx. Бэкап: ${NGINX_BACKUP:-нет}"; }
 }
 
 obtain_cert() {
@@ -933,7 +938,7 @@ hls_latency_check() {
 
 # Уникальные IP, скачивавшие HLS-сегменты за последние $1 секунд (по умолчанию 20)
 hls_viewers() {
-  local log=/var/log/nginx/vrc-stream.access.log window=${1:-20}
+  local log=$NGINX_ACCESS_LOG window=${1:-20}
   [[ -r $log ]] || { echo "? (нужен sudo)"; return 0; }
   tail -n 50000 "$log" \
     | awk -v t="$(( $(date +%s) - window ))" '$1 >= t && $3 ~ /^2/ && $4 ~ /\.(ts|mp4|m4s)(\?|$)/ { print $2 }' \
@@ -1061,7 +1066,7 @@ cmd_uninstall() {
   rm -f "$SYSTEMD_DIR/vrc-stream-heal.service" "$SYSTEMD_DIR/vrc-stream-heal.timer"
   rm -f "$SYSTEMD_DIR/mediamtx.service"
   systemctl daemon-reload
-  rm -f "$MTX_BIN" /etc/nginx/sites-enabled/vrc-stream.conf "$NGINX_SITE" "$NGINX_SNIPPET"
+  rm -f "$MTX_BIN" "$NGINX_DIR/sites-enabled/vrc-stream.conf" "$NGINX_SITE" "$NGINX_SNIPPET"
   rm -rf "$(dirname "$MTX_CONF")" "$MTX_HOME" "$SETTINGS_DIR"
   id mediamtx >/dev/null 2>&1 && userdel mediamtx 2>/dev/null || true
   if command -v nginx >/dev/null && nginx -t 2>/dev/null; then systemctl reload nginx || true; fi

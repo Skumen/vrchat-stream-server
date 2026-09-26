@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+echo "umount $*" >> "$MOCK_LOG"
+rm -f "$MOCK_STATE/hls_mounted"
+exit 0

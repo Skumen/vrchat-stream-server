@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Подставной useradd: «создаёт» пользователя (последний аргумент)
+echo "useradd $*" >> "$MOCK_LOG"
+touch "$MOCK_STATE/user_${*: -1}"
+exit 0

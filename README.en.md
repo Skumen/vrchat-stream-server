@@ -180,6 +180,7 @@ Every viewer downloads the whole stream, so outbound traffic ≈ bitrate × numb
 **Automatically, on every push** ([GitHub Actions](https://github.com/Skumen/vrchat-stream-server/actions)):
 - ShellCheck on all scripts.
 - Unit tests: settings, firewall, fail2ban, waiting for apt, latency reset, `update`, certificate expiry, config generation, OBS profiles. System commands (`ufw`, `apt-get`, `systemctl`…) are mocked.
+- Full install test: the whole `setup.sh install` as under `sudo` on a fresh VM, with a temporary directory instead of `/`. Scenarios: fresh VM, re-run, migration from the old nginx-rtmp setup, no domain/firewall, DNS, Let's Encrypt and nginx failures, uninstall.
 - Integration tests with a real MediaMTX: OBS key, HLS, RTSP, offline screen, `status`. The fail2ban filter is checked with the real `fail2ban-regex`.
 
 If something doesn't work, open an [issue](https://github.com/Skumen/vrchat-stream-server/issues) with the output of `sudo vrc-stream status` and `sudo vrc-stream logs`.

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Подставной install: без смены владельца и прав (тесты работают без root), остальное — настоящий install
+echo "install $*" >> "$MOCK_LOG"
+a=()
+while (( $# )); do
+  case $1 in -o|-g|-m) shift 2 ;; *) a+=("$1"); shift ;; esac
+done
+exec /usr/bin/install "${a[@]}"

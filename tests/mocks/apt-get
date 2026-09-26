@@ -7,6 +7,7 @@ for pkg in "$@"; do
   case $pkg in
     ufw)      cp "$MOCK_DIR/ufw" "$MOCK_BIN/ufw" ;;
     fail2ban) cp "$MOCK_DIR/fail2ban-client" "$MOCK_BIN/fail2ban-client" ;;
+    libnginx-mod-rtmp) [[ " $* " == *" purge "* ]] && rm -f "$MOCK_STATE/rtmp_installed" ;;
   esac
 done
 chmod +x "$MOCK_BIN"/* 2>/dev/null

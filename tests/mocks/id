@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Подставной id: пользователь есть, если его «создал» useradd
+[[ -f $MOCK_STATE/user_${1:-} ]] && { echo "uid=999($1)"; exit 0; }
+echo "id: '${1:-}': no such user" >&2
+exit 1
