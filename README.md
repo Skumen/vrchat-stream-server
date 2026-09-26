@@ -12,9 +12,22 @@ OBS ──RTMP:1935──▶ MediaMTX ┼─ RTMP  rtmp://…/live/stream       
 - **[MediaMTX](https://github.com/bluenviron/mediamtx)** принимает поток от OBS и раздаёт его по RTSP, RTMP и HLS без перекодирования, поэтому почти не нагружает процессор.
 - **nginx** раздаёт HLS наружу по HTTP и HTTPS и получает сертификат Let's Encrypt.
 
-## Установка
+## Быстрая установка
 
-Нужна VM с Ubuntu 20.04+ или Debian 11+ (x86_64 или ARM). Скопируйте на неё `setup.sh` и запустите:
+На VM с Ubuntu 20.04+ или Debian 11+ (x86_64 или ARM) выполните:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Skumen/vrchat-stream-server/main/setup.sh -o setup.sh
+sudo DOMAIN=stream.example.com bash setup.sh
+```
+
+Замените `stream.example.com` на свой домен. Если домена нет, запустите просто `sudo bash setup.sh`: сервер будет работать по HTTP.
+
+Через несколько минут скрипт выведет готовые настройки для OBS и ссылки для VRChat. Дальше откройте порты (см. ниже) и настройте OBS по [OBS-settings.md](OBS-settings.md).
+
+## Установка подробно
+
+Скрипт можно скачать командой выше или скопировать на VM вручную. Запуск без HTTPS:
 
 ```bash
 sudo bash setup.sh
@@ -33,6 +46,8 @@ sudo DOMAIN=stream.example.com bash setup.sh
 **Порты.** Если VM в облаке, откройте в панели провайдера (security group / firewall) входящие **TCP 80, 443, 1935, 8554**. Правила `ufw` скрипт добавит сам, если ufw включён.
 
 Скрипт можно запускать повторно. Он сам уберёт старую установку на `nginx-rtmp` (блок `rtmp{}`, `SK.conf`, tmpfs) и сохранит бэкап `/etc/nginx` в `/root/vrc-stream-backups/`.
+
+**Обновление до свежей версии из репозитория.** Скачайте скрипт той же командой `curl` и запустите `sudo bash setup.sh`. Сохранённые настройки (ключ, домен и т.д.) останутся.
 
 ## Настройка OBS
 
