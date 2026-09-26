@@ -25,7 +25,7 @@
 #   MEDIAMTX_VERSION  версия MediaMTX (по умолчанию v1.21.1)
 set -euo pipefail
 
-VRC_STREAM_VERSION=1.0.0
+VRC_STREAM_VERSION=1.0.1
 MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-v1.21.1}"
 SETTINGS_DIR=/etc/vrc-stream
 SETTINGS_FILE=$SETTINGS_DIR/settings.env
@@ -594,6 +594,36 @@ cmd_status() {
   '
   echo
   echo "Зрители HLS (уникальные IP за 20 с, все потоки): $(hls_viewers)"
+
+  local live
+  live=$(jq -r --arg n "$STREAM_PATH" \
+    '[.items[] | select(.name == $n) | (if has("online") then .online else .ready end)][0] // false' <<<"$b")
+  hls_latency_check "$live"
+}
+
+# Длина HLS-сегментов и ожидаемая задержка. TARGETDURATION в MediaMTX только растёт
+# (до перезапуска), а плееры держат отставание ~3 × TARGETDURATION.
+hls_latency_check() {
+  local live=$1 base=${HLS_CHECK_BASE:-http://127.0.0.1} idx media pl td maxinf want
+  idx=$(curl -fsS --max-time 3 "$base/$STREAM_PATH/index.m3u8" 2>/dev/null) || return 0
+  media=$(grep -v '^#' <<<"$idx" | grep -m1 . || true)
+  [[ -n $media ]] || return 0
+  pl=$(curl -fsS --max-time 3 "$base/$STREAM_PATH/$media" 2>/dev/null) || return 0
+  td=$(sed -n 's/^#EXT-X-TARGETDURATION:\([0-9]*\).*/\1/p' <<<"$pl")
+  maxinf=$(awk -F'[:,]' '/^#EXTINF/ { if ($2 + 0 > m) m = $2 + 0 } END { printf "%.1f", m }' <<<"$pl")
+  [[ -n $td ]] || return 0
+
+  if [[ -r $SETTINGS_FILE ]]; then load_settings; fi
+  want=${HLS_SEGMENT:-1s}
+  if [[ $want == *ms ]]; then want=$(( (${want%ms} + 999) / 1000 )); else want=$(awk -v s="${want%s}" 'BEGIN { printf "%d", (s == int(s)) ? s : int(s) + 1 }'); fi
+
+  echo "HLS: сегменты сейчас до ${maxinf} с, TARGETDURATION ${td} с → задержка у зрителей ≈ $(( td * 3 )) с"
+  if [[ $live == true ]] && awk -v m="$maxinf" -v w="$want" 'BEGIN { exit !(m > w + 0.5) }'; then
+    warn "Сегменты длиннее ${want} с: в OBS интервал ключевых кадров должен быть ${want} s (не 0/авто)"
+  elif (( td > want )); then
+    warn "TARGETDURATION вырос до ${td} с (был длинный сегмент при обрыве/переподключении OBS) и держится до перезапуска."
+    warn "Сбросить задержку: sudo vrc-stream restart — лучше до начала эфира, зрителям придётся перезапустить видео."
+  fi
 }
 
 hls_viewers() {
