@@ -29,7 +29,7 @@
 #   APT_WAIT_MAX    сколько секунд ждать, пока система ставит обновления (по умолчанию 900)
 set -euo pipefail
 
-VRC_STREAM_VERSION=1.1.0
+VRC_STREAM_VERSION=1.1.1
 VRC_STREAM_REPO="${VRC_STREAM_REPO:-Skumen/vrchat-stream-server}"
 MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-v1.21.1}"
 SETTINGS_DIR=/etc/vrc-stream
@@ -175,11 +175,22 @@ check_os() {
 # На свежей VM в фоне часто идёт автообновление (unattended-upgrades) и держит
 # блокировку apt. Ждём его, а не падаем с "Could not get lock".
 APT_WAIT_MAX=${APT_WAIT_MAX:-900}
+DPKG_LOG=/var/log/dpkg.log
 
-# Имена процессов, которые сейчас держат apt ("unattended-upgr dpkg"), или пусто
+# Процессы, которые сейчас ставят пакеты ("unattended-upgrade dpkg"), или пусто.
+# unattended-upgrades ищем по полной командной строке, а не по имени: имя обрезается
+# до 15 символов ("unattended-upgr"), и под него попадает unattended-upgrade-shutdown —
+# служба, которая работает всегда и только ждёт выключения системы.
 apt_busy() {
-  pgrep -l -x 'apt|apt-get|aptitude|dpkg|unattended-upgr' 2>/dev/null \
-    | awk '{ print $2 }' | sort -u | tr '\n' ' ' | sed 's/ $//'
+  {
+    pgrep -l -x 'apt|apt-get|aptitude|dpkg' 2>/dev/null | awk '{ print $2 }'
+    if pgrep -f '/usr/bin/unattended-upgrade( |$)' >/dev/null 2>&1; then echo unattended-upgrade; fi
+  } | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+
+# Последнее действие dpkg ("16:40:01 unpack linux-firmware") — видно, что установка идёт
+dpkg_last_action() {
+  tail -n 1 "$DPKG_LOG" 2>/dev/null | awk '{ print $2, $3, $4 }' | cut -c1-70
 }
 
 # Проверяем каждые 5 с и продолжаем, как только apt освободится; раз в 30 с пишем, что ждём
@@ -189,7 +200,9 @@ wait_for_apt() {
     if (( waited == 0 )); then
       log "Система устанавливает обновления (apt занят: $who) — жду, продолжу сразу, как освободится"
     elif (( waited % 30 == 0 )); then
-      log "…всё ещё жду: $(( waited / 60 )):$(printf '%02d' $(( waited % 60 ))) (apt занят: $who)"
+      local last
+      last=$(dpkg_last_action)
+      log "…всё ещё жду: $(( waited / 60 )):$(printf '%02d' $(( waited % 60 ))) (apt занят: $who${last:+; dpkg: $last})"
     fi
     if (( waited >= APT_WAIT_MAX )); then
       die "apt занят дольше $(( APT_WAIT_MAX / 60 )) мин. Запустите скрипт ещё раз чуть позже"

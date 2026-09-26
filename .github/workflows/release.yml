@@ -49,5 +49,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/setup.sh dist/obs-profiles.zip dist/SHA256SUMS.txt \
-            --title "$(cat /tmp/title)" --notes-file /tmp/notes.md --verify-tag
+          title=$(cat /tmp/title)
+          echo "Заголовок: $title"
+          # Релиз создаём через API из JSON — заголовок и описание передаются как есть
+          jq -n --arg tag "$GITHUB_REF_NAME" --arg name "$title" --rawfile body /tmp/notes.md \
+            '{tag_name: $tag, name: $name, body: $body}' > /tmp/release.json
+          gh api "repos/$GITHUB_REPOSITORY/releases" --input /tmp/release.json > /dev/null
+          gh release upload "$GITHUB_REF_NAME" dist/setup.sh dist/obs-profiles.zip dist/SHA256SUMS.txt
+
+      - name: Проверка опубликованного релиза
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          got=$(gh release view "$GITHUB_REF_NAME" --json name -q .name)
+          if [ "$got" != "$(cat /tmp/title)" ]; then
+            echo "::error::Заголовок релиза «$got», ожидался «$(cat /tmp/title)»"
+            exit 1
+          fi
+          assets=$(gh release view "$GITHUB_REF_NAME" --json assets -q '[.assets[].name] | sort | join(" ")')
+          if [ "$assets" != "SHA256SUMS.txt obs-profiles.zip setup.sh" ]; then
+            echo "::error::Файлы релиза: «$assets»"
+            exit 1
+          fi
+          echo "Релиз $GITHUB_REF_NAME опубликован: $got ($assets)"
