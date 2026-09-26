@@ -12,14 +12,16 @@ if ! command -v fail2ban-regex >/dev/null; then
 fi
 
 (set -euo pipefail; write_fail2ban_filter)
-out=$(fail2ban-regex "$T_ROOT/tests/fixtures/mediamtx-auth.log" "$F2B_FILTER" 2>&1)
+log=$T_ROOT/tests/fixtures/mediamtx-auth.log
+out=$(fail2ban-regex "$log" "$F2B_FILTER" 2>&1)
 matched=$(grep -Eo '[0-9]+ matched' <<<"$out" | head -n 1 | cut -d' ' -f1)
+# --out ip — ровно те адреса, которые fail2ban забанит
+ips=$(fail2ban-regex --out ip "$log" "$F2B_FILTER" 2>&1 | sort -u | tr '\n' ' ')
 
 section "Фильтр vrc-stream-mediamtx"
-expect_eq  "ловит 3 неудачные попытки (IPv4, IPv4, IPv6)" "${matched:-нет}" "3"
-expect_has "IP атакующего по RTMP"      "$out" "203.0.113.7"
-expect_has "второй IP"                  "$out" "198.51.100.9"
-expect_has "IPv6"                       "$out" "2001:db8::5"
-expect_hasnt "не трогает успешную публикацию" "$(grep -A50 'Addresses found' <<<"$out")" "192.0.2.10"
+expect_eq  "ловит 3 неудачные попытки, «closed:» не считает дважды" "${matched:-нет}" "3"
+expect_eq  "банит ровно эти IP (IPv4, IPv4, IPv6)" "$ips" "198.51.100.9 2001:db8::5 203.0.113.7 "
+expect_hasnt "не трогает успешную публикацию"      "$ips" "192.0.2.10"
+expect_hasnt "не трогает обычные отключения"       "$ips" "192.0.2.20"
 
 finish
