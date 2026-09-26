@@ -27,7 +27,7 @@
 #   MEDIAMTX_VERSION  версия MediaMTX (по умолчанию v1.21.1)
 set -euo pipefail
 
-VRC_STREAM_VERSION=1.0.2
+VRC_STREAM_VERSION=1.0.3
 MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-v1.21.1}"
 SETTINGS_DIR=/etc/vrc-stream
 SETTINGS_FILE=$SETTINGS_DIR/settings.env
@@ -155,13 +155,37 @@ check_os() {
   command -v systemctl >/dev/null || die "Нужен systemd"
 }
 
+# На свежей VM в фоне часто идёт автообновление (unattended-upgrades) и держит
+# блокировку apt. Ждём его, а не падаем с "Could not get lock".
+APT_WAIT_MAX=${APT_WAIT_MAX:-900}
+
+wait_for_apt() {
+  local waited=0
+  while pgrep -x 'apt|apt-get|aptitude|dpkg|unattended-upgr' >/dev/null; do
+    if (( waited == 0 )); then
+      log "Система устанавливает обновления (apt занят) — жду, до $(( APT_WAIT_MAX / 60 )) мин…"
+    fi
+    if (( waited >= APT_WAIT_MAX )); then
+      die "apt занят дольше $(( APT_WAIT_MAX / 60 )) мин. Запустите скрипт ещё раз чуть позже"
+    fi
+    sleep 5
+    waited=$(( waited + 5 ))
+  done
+}
+
+# apt-get с ожиданием: сначала ждём фоновые процессы, затем apt сам ждёт блокировку dpkg
+apt_get() {
+  wait_for_apt
+  apt-get -o DPkg::Lock::Timeout="$APT_WAIT_MAX" "$@"
+}
+
 install_packages() {
   log "Устанавливаю пакеты"
   export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
   local pkgs=(nginx curl ca-certificates tar jq)
   [[ -n $DOMAIN ]] && pkgs+=(certbot)
-  apt-get update -q
-  apt-get install -y -q "${pkgs[@]}"
+  apt_get update -q
+  apt_get install -y -q "${pkgs[@]}"
 }
 
 backup_nginx() {
@@ -194,7 +218,7 @@ cleanup_legacy() {
 
   if dpkg -s libnginx-mod-rtmp >/dev/null 2>&1; then
     log "Удаляю nginx-rtmp (порт $RTMP_PORT теперь у MediaMTX)"
-    apt-get purge -y -q libnginx-mod-rtmp
+    apt_get purge -y -q libnginx-mod-rtmp
   fi
 
   if grep -qE '[[:space:]]/var/www/hls[[:space:]]' /etc/fstab; then
@@ -493,7 +517,11 @@ setup_firewall() {
 
   if ! command -v ufw >/dev/null; then
     log "Устанавливаю ufw"
-    apt-get install -y -q ufw
+    # Сбой фаервола не должен прерывать установку: дальше ещё выпуск HTTPS-сертификата
+    if ! apt_get install -y -q ufw; then
+      warn "Не удалось установить ufw — фаервол пропущен. Повторите позже: sudo vrc-stream install"
+      return 0
+    fi
   fi
 
   local was_active=0 p ssh rules=() closed
