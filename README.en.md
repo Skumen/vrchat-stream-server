@@ -194,7 +194,7 @@ tests/run.sh               # everything
 
 Requires `bash`, `jq`, `curl`, `openssl`. Checking the fail2ban filter needs `fail2ban-regex`; without it that test is skipped.
 
-**Releasing.** Bump `VRC_STREAM_VERSION` in `setup.sh`, add release notes to `docs/releases/vX.Y.Z.md` (the first line is the title) and push a tag:
+**Releasing.** Bump `VRC_STREAM_VERSION` in `setup.sh`, add release notes to `docs/releases/vX.Y.Z.md` and push a tag. The release title is the version number; a leading `# …` line in the file is skipped:
 
 ```bash
 git tag -a v1.2.0 -m "vrc-stream 1.2.0" && git push origin v1.2.0

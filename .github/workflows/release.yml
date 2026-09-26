@@ -35,8 +35,9 @@ jobs:
             echo "::error::Нет файла с описанием релиза: $notes"
             exit 1
           fi
-          head -n 1 "$notes" | sed 's/^# *//' > /tmp/title
-          tail -n +2 "$notes" > /tmp/notes.md
+          # Заголовок релиза — только номер версии; строка "# …" в начале файла (если есть) пропускается
+          echo "$GITHUB_REF_NAME" > /tmp/title
+          if head -n 1 "$notes" | grep -q '^# '; then tail -n +2 "$notes"; else cat "$notes"; fi > /tmp/notes.md
 
       - name: Файлы релиза
         run: |

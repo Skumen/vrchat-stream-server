@@ -192,7 +192,7 @@ tests/run.sh               # всё
 
 Нужны `bash`, `jq`, `curl`, `openssl`. Для проверки фильтра fail2ban нужен `fail2ban-regex`, без него этот тест пропускается.
 
-**Выпуск релиза.** Поднимите `VRC_STREAM_VERSION` в `setup.sh`, добавьте описание в `docs/releases/vX.Y.Z.md` (первая строка — заголовок) и отправьте тег:
+**Выпуск релиза.** Поднимите `VRC_STREAM_VERSION` в `setup.sh`, добавьте описание в `docs/releases/vX.Y.Z.md` и отправьте тег. Заголовок релиза — номер версии, строка `# …` в начале файла пропускается:
 
 ```bash
 git tag -a v1.2.0 -m "vrc-stream 1.2.0" && git push origin v1.2.0
